@@ -27,11 +27,8 @@ CREATE TABLE IF NOT EXISTS users (
     parent_phone TEXT,
     personnel_code TEXT,
     specialty TEXT,
-    web_password_hash TEXT,
     custom_permissions TEXT NOT NULL DEFAULT '[]',
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
-    failed_web_logins INTEGER NOT NULL DEFAULT 0,
-    locked_until TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

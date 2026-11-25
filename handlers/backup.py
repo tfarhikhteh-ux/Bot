@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+
 from balethon import Client
 from balethon.conditions import equals, private
 from balethon.objects import CallbackQuery, Message
@@ -18,7 +20,7 @@ def register(client: Client, ctx: BotContext) -> None:
         async def _run(actor):
             ctx.services.permissions.require_permission(actor, "BACKUP_CREATE", "BACKUP")
             backups = ctx.services.backups.list_backups(actor)
-            lines = ["💾 مدیریت پشتیبان‌گیری و بازیابی پایگاه داده (ویژه ADMIN)", "━" * 26]
+            lines = ["💾 مدیریت پشتیبان‌گیری و بازیابی پایگاه داده در بله (ویژه ADMIN)", "━" * 26]
             for b in backups[:8]:
                 kb_size = round(b["size_bytes"] / 1024, 1)
                 lines.append(
@@ -49,12 +51,36 @@ def register(client: Client, ctx: BotContext) -> None:
 
             if action == "create":
                 rec = ctx.services.backups.create_backup(actor=actor, backup_type="MANUAL")
-                await safe_answer_callback(callback_query, "نسخه پشتیبان ایجاد شد.")
-                await client.send_message(
+                file_path = ctx.services.backups.resolve_safe_backup_path(rec["filename"])
+                bio = io.BytesIO(file_path.read_bytes())
+                bio.name = rec["filename"]
+                await safe_answer_callback(callback_query, "نسخه پشتیبان ایجاد و ارسال شد.")
+                await client.send_document(
                     chat_id,
-                    f"✅ پشتیبان جدید با موفقیت تهیه و راستی‌آزمایی شد:\n"
-                    f"📁 فایل: {rec['filename']}\n"
-                    f"🔐 SHA-256: {rec['sha256'][:24]}...",
+                    bio,
+                    caption=(
+                        f"✅ پشتیبان جدید با موفقیت تهیه و راستی‌آزمایی شد:\n"
+                        f"📁 فایل: {rec['filename']}\n"
+                        f"🔐 SHA-256: {rec['sha256'][:24]}..."
+                    ),
+                )
+            elif action == "dl":
+                bid = int(parts[2])
+                row = ctx.services.db.fetchone("SELECT * FROM backups WHERE id = ?;", (bid,))
+                if not row:
+                    raise ValidationError("نسخه پشتیبان موردنظر یافت نشد.")
+                file_path = ctx.services.backups.resolve_safe_backup_path(row["filename"])
+                bio = io.BytesIO(file_path.read_bytes())
+                bio.name = row["filename"]
+                await safe_answer_callback(callback_query, "فایل پشتیبان آماده ارسال شد.")
+                await client.send_document(
+                    chat_id,
+                    bio,
+                    caption=(
+                        f"📥 فایل پشتیبان پایگاه داده:\n"
+                        f"📁 {row['filename']}\n"
+                        f"🔐 SHA-256: {row['sha256'][:24]}..."
+                    ),
                 )
             elif action == "ask_restore":
                 ctx.services.permissions.require_permission(actor, "BACKUP_RESTORE", "BACKUP")

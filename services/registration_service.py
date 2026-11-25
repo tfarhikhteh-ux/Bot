@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from database.db import DatabaseManager
@@ -9,9 +8,7 @@ from database.repositories.classes import ClassRepository
 from database.repositories.registration import RegistrationRepository
 from database.repositories.settings import SettingsRepository
 from database.repositories.users import UserRepository
-from utils.dates import now_iso, now_tehran
 from utils.formatters import role_label
-from utils.security import hash_password, verify_password
 from utils.validators import (
     ValidationError,
     sanitize_text,
@@ -27,7 +24,7 @@ from .permission_service import ASSOCIATION_DELEGATABLE_PERMISSIONS, AccessDenie
 
 
 class RegistrationService:
-    """مدیریت کامل ثبت‌نام، تأیید/رد در گروه مدیریتی، مدیریت کاربران و احراز هویت پنل وب."""
+    """مدیریت کامل ثبت‌نام، تأیید/رد در گروه مدیریتی بله و مدیریت کاربران و دسترسی‌ها."""
 
     def __init__(
         self,
@@ -303,7 +300,6 @@ class RegistrationService:
         student_code: Optional[str] = None,
         grade_level: Optional[str] = None,
         specialty: Optional[str] = None,
-        web_password: Optional[str] = None,
     ) -> Dict[str, Any]:
         clean_role = validate_role(role, self_registration=False)
         self.permissions.ensure_can_manage_user(actor, target_user=None, target_new_role=clean_role)
@@ -314,7 +310,6 @@ class RegistrationService:
             raise ValidationError("کاربری با این شناسه بله قبلاً ثبت شده است.")
         if clean_stu and self.users.get_by_student_code(clean_stu):
             raise ValidationError("این کد دانش‌آموزی تکراری است.")
-        pw_hash = hash_password(web_password) if web_password else None
 
         user = self.users.create(
             bale_user_id=int(bale_user_id),
@@ -324,7 +319,6 @@ class RegistrationService:
             student_code=clean_stu,
             grade_level=grade_level,
             specialty=specialty,
-            web_password_hash=pw_hash,
             is_active=1,
         )
         self.audit.log(
@@ -458,149 +452,4 @@ class RegistrationService:
             description=f"تنظیم مجوزهای عضو انجمن {target['full_name']}",
         )
         return updated
-
-    def set_web_password(self, actor: Dict[str, Any], target_user_id: int, new_password: str) -> None:
-        target = self.users.get_by_id(target_user_id)
-        if not target:
-            raise ValidationError("کاربر یافت نشد.")
-        if actor["id"] != target_user_id:
-            self.permissions.ensure_can_manage_user(actor, target_user=target)
-        pw_hash = hash_password(new_password)
-        self.users.update_fields(target_user_id, web_password_hash=pw_hash, failed_web_logins=0, locked_until=None)
-        self.audit.log(
-            action="SET_WEB_PASSWORD",
-            entity_type="USER",
-            actor=actor,
-            entity_id=target_user_id,
-            description=f"تنظیم یا تغییر رمز عبور پنل وب برای {target['full_name']}",
-        )
-
-    def authenticate_web_user(
-        self,
-        bale_user_id: int,
-        password: str,
-        max_attempts: int = 5,
-        lockout_minutes: int = 15,
-        ip_address: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        user = self.users.get_by_bale_id(bale_user_id)
-        now_str = now_iso()
-        if not user or not user.get("is_active"):
-            self.audit.log(
-                action="WEB_LOGIN_FAILED",
-                entity_type="AUTH",
-                actor_bale_id=bale_user_id,
-                result="FAILURE",
-                ip_address=ip_address,
-                description="تلاش ورود ناموفق به پنل وب (کاربر ناموجود یا غیرفعال)",
-            )
-            raise AccessDeniedError("شناسه کاربری یا رمز عبور نادرست است.")
-
-        if user.get("locked_until") and user["locked_until"] > now_str:
-            self.audit.log(
-                action="WEB_LOGIN_LOCKED",
-                entity_type="AUTH",
-                actor=user,
-                result="DENIED",
-                ip_address=ip_address,
-                description="تلاش ورود در زمان قفل موقت حساب",
-            )
-            raise AccessDeniedError("حساب شما به دلیل تلاش‌های ناموفق متوالی موقتاً قفل شده است. کمی بعد تلاش کنید.")
-
-        if not verify_password(user.get("web_password_hash"), password):
-            fails = int(user.get("failed_web_logins") or 0) + 1
-            locked_until = None
-            if fails >= max_attempts:
-                locked_until = (now_tehran() + timedelta(minutes=lockout_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
-            self.users.update_fields(user["id"], failed_web_logins=fails, locked_until=locked_until)
-            self.audit.log(
-                action="WEB_LOGIN_FAILED",
-                entity_type="AUTH",
-                actor=user,
-                result="FAILURE",
-                ip_address=ip_address,
-                description=f"رمز عبور نادرست در پنل وب (تلاش {fails})",
-            )
-            raise AccessDeniedError("شناسه کاربری یا رمز عبور نادرست است.")
-
-        # بررسی مجوز ورود به پنل وب مدیریتی/آموزشی (ادمین، مدیر، معاون، دبیر، عضو انجمن مجاز)
-        allowed_web_roles = {"ADMIN", "SCHOOL_MANAGER", "DEPUTY", "TEACHER", "ASSOCIATION_MEMBER"}
-        if user["role"] not in allowed_web_roles:
-            self.audit.log(
-                action="WEB_LOGIN_ROLE_DENIED",
-                entity_type="AUTH",
-                actor=user,
-                result="DENIED",
-                ip_address=ip_address,
-                description="نقش کاربری مجاز به ورود به پنل وب مدیریتی نیست.",
-            )
-            raise AccessDeniedError("نقش کاربری شما مجوز ورود به پنل وب مدیریتی را ندارد.")
-
-        self.users.update_fields(user["id"], failed_web_logins=0, locked_until=None)
-        refreshed = self.users.get_by_id(user["id"])
-        self.audit.log(
-            action="WEB_LOGIN_SUCCESS",
-            entity_type="AUTH",
-            actor=refreshed,
-            result="SUCCESS",
-            ip_address=ip_address,
-            description="ورود موفق به پنل وب",
-        )
-        return refreshed
-
-    def authenticate_student_portal(
-        self,
-        identifier: str,
-        password: str,
-        max_attempts: int = 5,
-        lockout_minutes: int = 15,
-        ip_address: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """احراز هویت امن درگاه کارنامه آنلاین دانش‌آموز و ولی با کد دانش‌آموزی یا شناسه بله."""
-        ident = (identifier or "").strip()
-        user = self.users.get_by_student_code(ident) if ident else None
-        if not user and ident.isdigit():
-            user = self.users.get_by_bale_id(int(ident))
-
-        now_str = now_iso()
-        if not user or not user.get("is_active") or user["role"] not in {"STUDENT", "PARENT"}:
-            self.audit.log(
-                action="PORTAL_LOGIN_FAILED",
-                entity_type="AUTH",
-                result="FAILURE",
-                ip_address=ip_address,
-                description=f"ورود ناموفق به درگاه کارنامه آنلاین ({ident[:20]})",
-            )
-            raise AccessDeniedError("کد دانش‌آموزی/شناسه کاربری یا رمز کارنامه آنلاین نادرست است.")
-
-        if user.get("locked_until") and user["locked_until"] > now_str:
-            raise AccessDeniedError("حساب شما به دلیل تلاش‌های ناموفق متوالی موقتاً قفل شده است. چند دقیقه دیگر تلاش کنید.")
-
-        if not verify_password(user.get("web_password_hash"), password):
-            fails = int(user.get("failed_web_logins") or 0) + 1
-            locked_until = None
-            if fails >= max_attempts:
-                locked_until = (now_tehran() + timedelta(minutes=lockout_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
-            self.users.update_fields(user["id"], failed_web_logins=fails, locked_until=locked_until)
-            self.audit.log(
-                action="PORTAL_LOGIN_FAILED",
-                entity_type="AUTH",
-                actor=user,
-                result="FAILURE",
-                ip_address=ip_address,
-                description=f"رمز نادرست در درگاه کارنامه آنلاین (تلاش {fails})",
-            )
-            raise AccessDeniedError("کد دانش‌آموزی/شناسه کاربری یا رمز کارنامه آنلاین نادرست است.")
-
-        self.users.update_fields(user["id"], failed_web_logins=0, locked_until=None)
-        refreshed = self.users.get_by_id(user["id"])
-        self.audit.log(
-            action="PORTAL_LOGIN_SUCCESS",
-            entity_type="AUTH",
-            actor=refreshed,
-            result="SUCCESS",
-            ip_address=ip_address,
-            description="ورود موفق به درگاه کارنامه آنلاین",
-        )
-        return refreshed
 

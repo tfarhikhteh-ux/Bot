@@ -25,11 +25,6 @@ class AuditService:
     ) -> int:
         actor_id = actor["id"] if actor and "id" in actor else None
         bale_id = actor_bale_id or (actor.get("bale_user_id") if actor else None)
-        # حذف هش رمز عبور در صورت وجود در داده‌های ثبت‌شده
-        if isinstance(before_data, dict):
-            before_data = {k: v for k, v in before_data.items() if k != "web_password_hash"}
-        if isinstance(after_data, dict):
-            after_data = {k: v for k, v in after_data.items() if k != "web_password_hash"}
         return self.repo.record(
             action=action,
             entity_type=entity_type,

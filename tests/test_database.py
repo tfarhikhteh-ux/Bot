@@ -52,7 +52,12 @@ def test_migrations_are_idempotent(app_env):
     second_run = run_migrations(db)
     assert second_run == []
     versions = [r["version"] for r in db.fetchall("SELECT version FROM schema_migrations ORDER BY version;")]
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6]
+    # اطمینان از عدم وجود هرگونه ستون یا تنظیم مربوط به پنل وب
+    user_cols = {r["name"] for r in db.fetchall("PRAGMA table_info(users);")}
+    assert "web_password_hash" not in user_cols
+    assert "failed_web_logins" not in user_cols
+    assert db.fetchone("SELECT 1 FROM settings WHERE key = 'public_web_url';") is None
 
 
 def test_foreign_key_enforced(app_env):

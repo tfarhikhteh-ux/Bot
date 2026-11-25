@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import getpass
 import logging
 import sys
-import threading
 from typing import Optional, Sequence, Tuple
-
-from werkzeug.serving import make_server
 
 from config import AppConfig, ConfigurationError
 from database import DatabaseManager, ensure_primary_admin, run_migrations
@@ -17,7 +13,6 @@ from services import ServiceContainer
 from utils.helpers import FatalBotAuthError, SafeSchoolClient
 from utils.logging_config import redact_sensitive_text, setup_logging
 from utils.security import DuplicateActionGuard, RateLimiter, SingleInstanceError, SingleInstanceLock
-from web import create_web_app
 
 
 def bootstrap_services(config: AppConfig) -> Tuple[ServiceContainer, dict]:
@@ -57,7 +52,6 @@ def build_bot_client(config: AppConfig, services: ServiceContainer) -> Tuple[Saf
             window_seconds=config.rate_limit_window_seconds,
         ),
         dup_guard=DuplicateActionGuard(cooldown_seconds=3.0),
-        web_secret_key=config.web_secret_key,
     )
     register_all_handlers(client, ctx)
     return client, ctx
@@ -112,33 +106,17 @@ async def run_bot_async(config: AppConfig, services: ServiceContainer) -> None:
             await client.disconnect()
 
 
-def run_web_server(config: AppConfig, services: ServiceContainer) -> None:
-    app = create_web_app(config, services)
-    server = make_server(config.web_host, config.web_port, app, threaded=True)
-    logging.getLogger("school_bot.web").info(
-        "پنل وب مدیریتی بر روی http://%s:%s آماده دریافت درخواست است.",
-        config.web_host,
-        config.web_port,
-    )
-    server.serve_forever()
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="سامانه جامع مدیریت هوشمند مدرسه در بله (School Bot)")
+    parser = argparse.ArgumentParser(description="سامانه جامع مدیریت هوشمند مدرسه در پیام‌رسان بله (School Bot)")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("bot", help="اجرای ربات بله و زمان‌بند خودکار (پیش‌فرض)")
-    sub.add_parser("web", help="اجرای پنل وب مدیریتی")
-    sub.add_parser("all", help="اجرای هم‌زمان ربات بله و پنل وب")
     sub.add_parser("migrate", help="ساخت پایگاه داده و اجرای Migrationها")
     sub.add_parser("backup", help="تهیه نسخه پشتیبان دستی از دیتابیس")
 
     p_restore = sub.add_parser("restore", help="بازیابی دیتابیس از فایل پشتیبان")
     p_restore.add_argument("--file", required=True, help="نام فایل پشتیبان در پوشه backups")
     p_restore.add_argument("--confirm", action="store_true", help="تأیید صریح عملیات بازیابی")
-
-    p_pw = sub.add_parser("create-web-admin", help="تنظیم رمز عبور پنل وب برای ادمین اصلی")
-    p_pw.add_argument("--password", required=False, help="رمز عبور جدید (حداقل ۸ کاراکتر)")
     return parser
 
 
@@ -153,7 +131,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         logger = setup_logging(
             config.log_dir,
             level=config.log_level,
-            secrets_to_redact=[config.bale_bot_token, config.web_secret_key],
+            secrets_to_redact=[config.bale_bot_token],
         )
         services, admin_user = bootstrap_services(config)
     except ConfigurationError as exc:
@@ -175,26 +153,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.info("بازیابی موفق از %s (پشتیبان ایمنی قبل: %s)", res["restored_from"], res["pre_restore_snapshot"])
             return 0
 
-        if cmd == "create-web-admin":
-            pw = args.password or getpass.getpass("رمز عبور جدید پنل وب برای ادمین اصلی (حداقل ۸ کاراکتر): ")
-            services.registration.set_web_password(admin_user, admin_user["id"], pw)
-            logger.info("رمز عبور پنل وب برای ادمین اصلی (%s) با موفقیت ذخیره شد.", admin_user["bale_user_id"])
-            return 0
-
-        if cmd == "web":
-            run_web_server(config, services)
-            return 0
-
         lock_path = config.log_dir / "school_bot.instance.lock"
         with SingleInstanceLock(lock_path):
-            if cmd == "all":
-                web_thread = threading.Thread(
-                    target=run_web_server,
-                    args=(config, services),
-                    daemon=True,
-                    name="SchoolBotWebServer",
-                )
-                web_thread.start()
             asyncio.run(run_bot_async(config, services))
         return 0
     except SingleInstanceError as exc:

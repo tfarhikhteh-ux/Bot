@@ -23,9 +23,6 @@ def app_env(tmp_path: Path):
         "SCHOOL_NAME": "دبیرستان آزمایشی نمونه",
         "ACADEMIC_YEAR": "1405-1406",
         "CURRENT_TERM": "ترم اول",
-        "WEB_SECRET_KEY": "test_secure_random_secret_key_for_school_bot_2026",
-        "WEB_MAX_LOGIN_ATTEMPTS": "3",
-        "WEB_LOCKOUT_MINUTES": "10",
         "BACKUP_RETENTION_COUNT": "4",
     }
     cfg = AppConfig.from_mapping(env_map, root_dir=tmp_path)

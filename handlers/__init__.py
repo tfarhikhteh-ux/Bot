@@ -39,7 +39,6 @@ class BotContext:
     services: ServiceContainer
     rate_limiter: RateLimiter
     dup_guard: DuplicateActionGuard
-    web_secret_key: str = ""
     session_routers: Dict[str, SessionStepHandler] = field(default_factory=dict)
 
     @property

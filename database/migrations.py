@@ -126,7 +126,6 @@ def _migration_004_continuous_modifiers_and_portal(conn: sqlite3.Connection) -> 
     portal_settings = [
         ("continuous_base_score", "15", "ACADEMIC", 0),
         ("online_report_card_enabled", "1", "ACADEMIC", 0),
-        ("public_web_url", "http://127.0.0.1:5000", "GENERAL", 0),
     ]
     for key, val, cat, admin_only in portal_settings:
         conn.execute(
@@ -164,12 +163,17 @@ def _migration_005_group_locks(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_006_bale_only_cleanup(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM settings WHERE key = 'public_web_url';")
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_schema", _migration_001_initial_schema),
     (2, "002_seed_defaults", _migration_002_seed_defaults),
     (3, "003_reporting_indexes", _migration_003_reporting_indexes),
     (4, "004_continuous_modifiers_and_portal", _migration_004_continuous_modifiers_and_portal),
     (5, "005_group_locks", _migration_005_group_locks),
+    (6, "006_bale_only_cleanup", _migration_006_bale_only_cleanup),
 ]
 
 

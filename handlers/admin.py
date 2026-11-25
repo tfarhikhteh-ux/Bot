@@ -114,14 +114,6 @@ def register(client: Client, ctx: BotContext) -> None:
                     )
                 await safe_answer_callback(callback_query, "گزارش آماده شد.")
                 await send_chunked_message(client, callback_query.message.chat.id, "\n".join(lines))
-            elif action == "set_web_pass":
-                ctx.users_repo.set_session(uid, FLOW_ADMIN, "SET_WEB_PASS_BALE_ID", {})
-                await safe_answer_callback(callback_query, "شناسه کاربر را وارد کنید.")
-                await client.send_message(
-                    callback_query.message.chat.id,
-                    "🔑 شناسه بله کاربری که می‌خواهید رمز ورود پنل وب برایش تنظیم کنید وارد نمایید:",
-                    reply_markup=wizard_cancel_keyboard(),
-                )
 
         await ctx.run_safe_callback(client, callback_query, _run)
 
@@ -183,19 +175,3 @@ async def _handle_admin_step(ctx: BotContext, client: Client, message: Message, 
         ctx.users_repo.clear_session(uid)
         await message.reply(f"✅ شناسه گروه مدیریتی بر روی {raw} تنظیم شد.", reply_markup=ctx.main_markup_for(actor))
         return
-
-    if step == "SET_WEB_PASS_BALE_ID":
-        if not raw.isdigit():
-            raise ValidationError("شناسه بله کاربر باید عددی باشد.")
-        target = ctx.users_repo.get_by_bale_id(int(raw))
-        if not target:
-            raise ValidationError("کاربری با این شناسه بله یافت نشد.")
-        data["target_user_id"] = target["id"]
-        ctx.users_repo.set_session(uid, FLOW_ADMIN, "SET_WEB_PASS_VALUE", data)
-        await message.reply(f"🔐 رمز عبور جدید پنل وب برای «{target['full_name']}» را وارد کنید (حداقل ۸ کاراکتر):")
-        return
-
-    if step == "SET_WEB_PASS_VALUE":
-        ctx.services.registration.set_web_password(actor, int(data["target_user_id"]), raw)
-        ctx.users_repo.clear_session(uid)
-        await message.reply("✅ رمز عبور پنل وب با موفقیت به‌صورت هش امن ذخیره شد.", reply_markup=ctx.main_markup_for(actor))

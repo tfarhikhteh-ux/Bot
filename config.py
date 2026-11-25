@@ -14,7 +14,6 @@ PLACEHOLDER_SECRETS = {
     "",
     "your_bale_bot_token_here",
     "changeme",
-    "change_this_to_a_long_random_secret_key_at_least_32_chars",
 }
 
 TOKEN_PATTERN = re.compile(r"^\d{5,20}:[A-Za-z0-9_\-]{15,}$")
@@ -22,12 +21,6 @@ TOKEN_PATTERN = re.compile(r"^\d{5,20}:[A-Za-z0-9_\-]{15,}$")
 
 class ConfigurationError(RuntimeError):
     """خطای تنظیمات حیاتی که باید مانع اجرای ناامن سامانه شود."""
-
-
-def _parse_bool(value: Optional[str], default: bool = False) -> bool:
-    if value is None or value.strip() == "":
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_optional_int(value: Optional[str], field_name: str) -> Optional[int]:
@@ -80,13 +73,6 @@ class AppConfig:
     message_queue_batch_size: int
     message_queue_rate_delay_seconds: float
     scheduler_poll_seconds: int
-    web_host: str
-    web_port: int
-    web_secret_key: str
-    web_session_minutes: int
-    web_cookie_secure: bool
-    web_max_login_attempts: int
-    web_lockout_minutes: int
     bale_api_base_url: str
     bale_timeout_seconds: int
     bale_proxy_url: Optional[str]
@@ -135,13 +121,6 @@ class AppConfig:
                 env.get("MESSAGE_QUEUE_RATE_DELAY_SECONDS"), 0.15, "MESSAGE_QUEUE_RATE_DELAY_SECONDS", 0.0
             ),
             scheduler_poll_seconds=_parse_int(env.get("SCHEDULER_POLL_SECONDS"), 30, "SCHEDULER_POLL_SECONDS", 5),
-            web_host=(env.get("WEB_HOST") or "127.0.0.1").strip(),
-            web_port=_parse_int(env.get("WEB_PORT"), 8080, "WEB_PORT", 1),
-            web_secret_key=(env.get("WEB_SECRET_KEY") or "").strip(),
-            web_session_minutes=_parse_int(env.get("WEB_SESSION_MINUTES"), 60, "WEB_SESSION_MINUTES", 5),
-            web_cookie_secure=_parse_bool(env.get("WEB_COOKIE_SECURE"), False),
-            web_max_login_attempts=_parse_int(env.get("WEB_MAX_LOGIN_ATTEMPTS"), 5, "WEB_MAX_LOGIN_ATTEMPTS", 2),
-            web_lockout_minutes=_parse_int(env.get("WEB_LOCKOUT_MINUTES"), 15, "WEB_LOCKOUT_MINUTES", 1),
             bale_api_base_url=(env.get("BALE_API_BASE_URL") or "https://tapi.bale.ai").strip().rstrip("/"),
             bale_timeout_seconds=_parse_int(env.get("BALE_TIMEOUT_SECONDS"), 25, "BALE_TIMEOUT_SECONDS", 5),
             bale_proxy_url=proxy_raw,
@@ -174,12 +153,3 @@ class AppConfig:
             raise ConfigurationError("توکن ربات بله (BALE_BOT_TOKEN) در فایل .env تنظیم نشده است.")
         if not TOKEN_PATTERN.match(self.bale_bot_token):
             raise ConfigurationError("قالب توکن ربات بله (BALE_BOT_TOKEN) نامعتبر است.")
-
-    def validate_web_settings(self) -> None:
-        self.validate_primary_admin()
-        secret_lower = self.web_secret_key.lower()
-        if not self.web_secret_key or secret_lower in PLACEHOLDER_SECRETS or len(self.web_secret_key) < 24:
-            raise ConfigurationError(
-                "کلید امنیتی پنل وب (WEB_SECRET_KEY) تنظیم نشده یا کوتاه‌تر از ۲۴ کاراکتر است. "
-                "لطفاً یک کلید تصادفی امن در فایل .env وارد کنید."
-            )

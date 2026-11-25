@@ -33,7 +33,6 @@ class UserRepository:
         parent_phone: Optional[str] = None,
         personnel_code: Optional[str] = None,
         specialty: Optional[str] = None,
-        web_password_hash: Optional[str] = None,
         is_active: int = 1,
     ) -> Dict[str, Any]:
         ts = now_iso()
@@ -42,9 +41,9 @@ class UserRepository:
             INSERT INTO users(
                 bale_user_id, username, full_name, phone, role,
                 student_code, national_code, grade_level, parent_phone,
-                personnel_code, specialty, web_password_hash, is_active,
+                personnel_code, specialty, is_active,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 bale_user_id,
@@ -58,7 +57,6 @@ class UserRepository:
                 parent_phone,
                 personnel_code,
                 specialty,
-                web_password_hash,
                 int(bool(is_active)),
                 ts,
                 ts,
@@ -78,11 +76,8 @@ class UserRepository:
             "parent_phone",
             "personnel_code",
             "specialty",
-            "web_password_hash",
             "custom_permissions",
             "is_active",
-            "failed_web_logins",
-            "locked_until",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:

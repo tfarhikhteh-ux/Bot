@@ -1,43 +1,15 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import os
-import secrets
 import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Deque, Dict, Optional
-
-from werkzeug.security import check_password_hash, generate_password_hash
+from typing import Deque, Dict
 
 
 class SingleInstanceError(RuntimeError):
     """زمانی که نسخه دیگری از ربات در حال اجراست."""
-
-
-def hash_password(password: str) -> str:
-    if not password or len(password) < 8:
-        raise ValueError("رمز عبور باید حداقل ۸ کاراکتر باشد.")
-    return generate_password_hash(password, method="pbkdf2:sha256:600000", salt_length=16)
-
-
-def verify_password(password_hash: Optional[str], candidate_password: str) -> bool:
-    if not password_hash or not candidate_password:
-        return False
-    return check_password_hash(password_hash, candidate_password)
-
-
-def generate_csrf_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
-def verify_csrf_token(expected: Optional[str], provided: Optional[str]) -> bool:
-    if not expected or not provided:
-        return False
-    return hmac.compare_digest(str(expected), str(provided))
 
 
 def restrict_file_permissions(path: Path) -> None:
@@ -153,37 +125,3 @@ class SingleInstanceLock:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.release()
-
-
-def generate_signed_report_token(secret_key: str, student_user_id: int, ttl_seconds: int = 86400) -> str:
-    """تولید توکن امضاشده (HMAC-SHA256) زمان‌دار برای مشاهده امن کارنامه آنلاین دانش‌آموز."""
-    exp_ts = int(time.time()) + max(60, int(ttl_seconds))
-    payload = f"{int(student_user_id)}:{exp_ts}".encode("ascii")
-    sig = hmac.new(secret_key.encode("utf-8"), payload, hashlib.sha256).hexdigest()[:32]
-    raw = f"{int(student_user_id)}:{exp_ts}:{sig}".encode("ascii")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def verify_signed_report_token(secret_key: str, token: str) -> Optional[int]:
-    """اعتبارسنجی توکن امضاشده کارنامه آنلاین و استخراج شناسه دانش‌آموز در صورت معتبر و منقضی‌نبودن."""
-    if not secret_key or not token:
-        return None
-    try:
-        padded = token + "=" * (-len(token) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii")
-        parts = decoded.split(":")
-        if len(parts) != 3:
-            return None
-        student_id = int(parts[0])
-        exp_ts = int(parts[1])
-        provided_sig = parts[2]
-        if exp_ts < int(time.time()):
-            return None
-        payload = f"{student_id}:{exp_ts}".encode("ascii")
-        expected_sig = hmac.new(secret_key.encode("utf-8"), payload, hashlib.sha256).hexdigest()[:32]
-        if not hmac.compare_digest(expected_sig, provided_sig):
-            return None
-        return student_id
-    except Exception:
-        return None
-

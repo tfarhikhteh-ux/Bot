@@ -16,10 +16,7 @@ from .security import (
     DuplicateActionGuard,
     RateLimiter,
     SingleInstanceLock,
-    generate_csrf_token,
-    hash_password,
-    verify_csrf_token,
-    verify_password,
+    restrict_file_permissions,
 )
 
 __all__ = [
@@ -30,16 +27,13 @@ __all__ = [
     "compute_week_type",
     "format_jalali_date",
     "format_jalali_datetime",
-    "generate_csrf_token",
-    "hash_password",
     "now_iso",
     "now_tehran",
     "parse_date_input",
+    "restrict_file_permissions",
     "setup_logging",
     "tehran_weekday_index",
     "to_english_digits",
     "to_persian_digits",
     "today_iso",
-    "verify_csrf_token",
-    "verify_password",
 ]

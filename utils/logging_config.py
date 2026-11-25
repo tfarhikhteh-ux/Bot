@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 
 BOT_TOKEN_REGEX = re.compile(r"(?:bot)?\d{5,20}:[A-Za-z0-9_\-]{15,}")
 SENSITIVE_KV_REGEX = re.compile(
-    r"((?:password|passwd|secret|token|web_secret_key)\s*[=:]\s*)([^\s,;\"']+)",
+    r"((?:password|passwd|secret|token)\s*[=:]\s*)([^\s,;\"']+)",
     re.IGNORECASE,
 )
 

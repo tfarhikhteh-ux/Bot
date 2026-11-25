@@ -19,12 +19,17 @@ from keyboards.teacher import BTN_TEACHER_GRADES, BTN_TEACHER_HOMEWORK
 from utils.dates import format_jalali_date
 from utils.formatters import format_report_card_text
 from utils.helpers import safe_answer_callback, send_chunked_message
-from utils.security import generate_signed_report_token
 from utils.validators import ValidationError
 
 from . import BotContext, cb_prefix
 
 FLOW_GRADES = "GRADES_FLOW"
+
+
+def _ensure_online_report_card_open(ctx: BotContext, actor: dict) -> None:
+    if actor["role"].upper() in {"STUDENT", "PARENT"}:
+        if not ctx.services.notifications.settings.get_bool("online_report_card_enabled", True):
+            raise ValidationError("مشاهده کارنامه آنلاین در حال حاضر توسط مدیریت مدرسه غیرفعال شده است.")
 
 
 def register(client: Client, ctx: BotContext) -> None:
@@ -70,63 +75,46 @@ def register(client: Client, ctx: BotContext) -> None:
     @client.on_callback_query(cb_prefix("grd:"))
     async def grade_callbacks(*, client: Client, callback_query: CallbackQuery):
         async def _run(actor):
+            checked = ctx.services.permissions.require_active_user(actor)
             parts = callback_query.data.split(":")
             action = parts[1]
             uid = int(callback_query.author.id)
             chat_id = callback_query.message.chat.id
 
             if action == "child":
+                _ensure_online_report_card_open(ctx, checked)
                 child_id = int(parts[2])
-                rc = ctx.services.grades.get_student_report_card(actor, child_id)
+                rc = ctx.services.grades.get_student_report_card(checked, child_id)
                 await safe_answer_callback(callback_query, "کارنامه فرزند")
                 await send_chunked_message(client, chat_id, format_report_card_text(rc))
-                await client.send_message(chat_id, "دریافت نسخه رسمی کارنامه:", reply_markup=report_card_export_inline(child_id))
+                await client.send_message(
+                    chat_id,
+                    "🎓 دریافت نسخه رسمی یا بروزرسانی لحظه‌ای کارنامه در بله:",
+                    reply_markup=report_card_export_inline(child_id),
+                )
             elif action in {"rc_pdf", "rc_xlsx"}:
+                _ensure_online_report_card_open(ctx, checked)
                 stu_id = int(parts[2])
                 fmt = "pdf" if action == "rc_pdf" else "xlsx"
-                file_bytes = ctx.services.grades.export_student_report_card(actor, stu_id, fmt=fmt)
+                file_bytes = ctx.services.grades.export_student_report_card(checked, stu_id, fmt=fmt)
                 bio = io.BytesIO(file_bytes)
                 bio.name = f"report_card_{stu_id}.{fmt}"
                 await safe_answer_callback(callback_query, f"فایل {fmt.upper()} کارنامه آماده شد.")
                 await client.send_document(chat_id, bio, caption=f"🎓 کارنامه رسمی دانش‌آموز ({fmt.upper()})")
             elif action == "refresh":
+                _ensure_online_report_card_open(ctx, checked)
                 stu_id = int(parts[2])
-                rc = ctx.services.grades.get_student_report_card(actor, stu_id)
-                await safe_answer_callback(callback_query, "کارنامه بروزرسانی شد.")
+                rc = ctx.services.grades.get_student_report_card(checked, stu_id)
+                await safe_answer_callback(callback_query, "کارنامه لحظه‌ای بروزرسانی شد.")
                 await send_chunked_message(client, chat_id, format_report_card_text(rc))
-            elif action == "web_link":
-                stu_id = int(parts[2])
-                ctx.services.permissions.ensure_can_access_student(actor, stu_id)
-                if not ctx.web_secret_key:
-                    raise ValidationError("کلید امنیتی پنل وب تنظیم نشده است.")
-                token = generate_signed_report_token(ctx.web_secret_key, stu_id, ttl_seconds=86400)
-                base_url = ctx.services.notifications.settings.get("public_web_url", "http://127.0.0.1:5000").rstrip("/")
-                link = f"{base_url}/online-card/{token}"
-                link_kb = InlineKeyboard()
-                if link.startswith("https://"):
-                    link_kb.add_row(InlineKeyboardButton("🌐 باز کردن کارنامه آنلاین", url=link, style="success"))
-                if 1 <= len(link) <= 256:
-                    link_kb.add_row(InlineKeyboardButton("📋 رونوشت (کپی) لینک کارنامه آنلاین", copy_text=link, style="primary"))
-                await safe_answer_callback(callback_query, "لینک کارنامه آنلاین ساخته شد.")
                 await client.send_message(
                     chat_id,
-                    f"🌐 لینک اختصاصی کارنامه آنلاین (معتبر به مدت ۲۴ ساعت):\n{link}\n\n"
-                    f"💡 همچنین هر زمان شبانه‌روز می‌توانید از آدرس {base_url}/student-portal با کد دانش‌آموزی/شناسه بله و رمز کارنامه آنلاین خود وارد شوید.",
-                    reply_markup=link_kb if link_kb.inline_keyboard else None,
-                )
-            elif action == "set_portal_pw":
-                checked = ctx.services.permissions.require_active_user(actor)
-                ctx.users_repo.set_session(uid, FLOW_GRADES, "SET_PORTAL_PW", {})
-                await safe_answer_callback(callback_query, "تنظیم رمز کارنامه آنلاین")
-                await client.send_message(
-                    chat_id,
-                    f"🔑 یک رمز عبور جدید (حداقل ۸ کاراکتر) برای ورود ۲۴ ساعته به درگاه کارنامه آنلاین وب ارسال کنید:\n"
-                    f"(شناسه ورود شما: کد دانش‌آموزی {checked.get('student_code') or '-'} یا شناسه بله {checked['bale_user_id']})",
-                    reply_markup=wizard_cancel_keyboard(),
+                    "🎓 دریافت نسخه رسمی یا بروزرسانی مجدد کارنامه:",
+                    reply_markup=report_card_export_inline(stu_id),
                 )
             elif action == "record":
                 evals = ctx.services.grades.grades.list_evaluation_types()
-                ev_txt = "\n".join(f"• شناسه {e['id']}: {e['name']} ({e['min_score']} تا {e['max_score']})" for e in evals)
+                ev_txt = "\n".join(f"• شناسه {e['id']}:\u200f {e['name']} ({e['min_score']} تا {e['max_score']})" for e in evals)
                 ctx.users_repo.set_session(uid, FLOW_GRADES, "RECORD_GRADE", {})
                 await safe_answer_callback(callback_query, "ثبت نمره جدید")
                 await client.send_message(
@@ -154,11 +142,11 @@ def register(client: Client, ctx: BotContext) -> None:
                 )
             elif action == "do_del":
                 gid = int(parts[2])
-                ctx.services.grades.delete_grade_controlled(actor, gid, reason="تأیید حذف در ربات")
+                ctx.services.grades.delete_grade_controlled(checked, gid, reason="تأیید حذف در ربات")
                 await safe_answer_callback(callback_query, "نمره حذف شد.")
                 await callback_query.message.edit_text(f"✅ نمره شماره #{gid} به‌صورت کنترل‌شده حذف و در تاریخچه ثبت شد.")
             elif action == "new_eval":
-                ctx.services.permissions.require_permission(actor, "MANAGE_EVALUATION_TYPES", "EVALUATION_TYPE")
+                ctx.services.permissions.require_permission(checked, "MANAGE_EVALUATION_TYPES", "EVALUATION_TYPE")
                 ctx.users_repo.set_session(uid, FLOW_GRADES, "CREATE_EVAL", {})
                 await safe_answer_callback(callback_query, "تعریف نوع ارزیابی")
                 await client.send_message(
@@ -168,7 +156,7 @@ def register(client: Client, ctx: BotContext) -> None:
                     reply_markup=wizard_cancel_keyboard(),
                 )
             elif action == "history":
-                ctx.services.permissions.require_roles(actor, "ADMIN", "SCHOOL_MANAGER")
+                ctx.services.permissions.require_roles(checked, "ADMIN", "SCHOOL_MANAGER")
                 hist = ctx.services.grades.grades.list_history(limit=15)
                 lines = ["📜 تاریخچه تغییرات نمرات:"]
                 for h in hist:
@@ -191,10 +179,16 @@ async def _open_grades_view(client: Client, message: Message, ctx: BotContext) -
         checked = ctx.services.permissions.require_active_user(actor)
         role = checked["role"].upper()
         if role == "STUDENT":
+            _ensure_online_report_card_open(ctx, checked)
             rc = ctx.services.grades.get_student_report_card(checked, checked["id"])
             await send_chunked_message(client, message.chat.id, format_report_card_text(rc))
-            await client.send_message(message.chat.id, "دریافت نسخه رسمی کارنامه:", reply_markup=report_card_export_inline(checked["id"]))
+            await client.send_message(
+                message.chat.id,
+                "🎓 دریافت نسخه رسمی یا بروزرسانی لحظه‌ای کارنامه در بله:",
+                reply_markup=report_card_export_inline(checked["id"]),
+            )
         elif role == "PARENT":
+            _ensure_online_report_card_open(ctx, checked)
             children = ctx.users_repo.get_children_of_parent(checked["id"])
             if not children:
                 await message.reply("فرزندی به حساب شما متصل نشده است.")
@@ -313,14 +307,3 @@ async def _handle_grades_step(ctx: BotContext, client: Client, message: Message,
         ctx.users_repo.clear_session(uid)
         await message.reply(f"✅ تکلیف «{hw['title']}» ثبت شد.", reply_markup=ctx.main_markup_for(actor))
         return
-
-    if step == "SET_PORTAL_PW":
-        ctx.services.registration.set_web_password(actor, actor["id"], raw)
-        ctx.users_repo.clear_session(uid)
-        base_url = ctx.services.notifications.settings.get("public_web_url", "http://127.0.0.1:5000").rstrip("/")
-        await message.reply(
-            f"✅ رمز کارنامه آنلاین شما با موفقیت تنظیم شد.\n"
-            f"اکنون در هر ساعت شبانه‌روز می‌توانید از آدرس زیر کارنامه آنلاین خود را مشاهده و چاپ کنید:\n"
-            f"{base_url}/student-portal",
-            reply_markup=ctx.main_markup_for(actor),
-        )

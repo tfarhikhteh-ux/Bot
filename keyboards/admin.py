@@ -45,18 +45,19 @@ def admin_panel_inline() -> InlineKeyboard:
         ],
         [
             InlineKeyboardButton("🕵️ گزارش ممیزی امنیتی (Audit)", callback_data="adm:audit_recent"),
-            InlineKeyboardButton("🔑 تنظیم رمز پنل وب", callback_data="adm:set_web_pass"),
         ],
     )
 
 
 def backup_menu_inline(backups: Sequence[Dict[str, Any]]) -> InlineKeyboard:
     kb = InlineKeyboard(
-        [InlineKeyboardButton("➕ تهیه نسخه پشتیبان فوری", callback_data="bkp:create")]
+        [InlineKeyboardButton("➕ تهیه و دریافت نسخه پشتیبان فوری", callback_data="bkp:create", style="success")]
     )
     for b in list(backups)[:5]:
+        short_name = b["filename"][:22]
         kb.add_row(
-            InlineKeyboardButton(f"♻️ بازیابی {b['filename'][:26]}", callback_data=f"bkp:ask_restore:{b['id']}")
+            InlineKeyboardButton(f"📥 دریافت {short_name}", callback_data=f"bkp:dl:{b['id']}"),
+            InlineKeyboardButton("♻️ بازیابی", callback_data=f"bkp:ask_restore:{b['id']}"),
         )
     return kb
 
