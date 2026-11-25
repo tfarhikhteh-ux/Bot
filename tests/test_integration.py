@@ -472,4 +472,152 @@ def test_excel_xlsx_and_pdf_exports_across_web_and_bot(app_env, actors):
     assert f"report_card_{s1['id']}.pdf" in sent_docs
 
 
+def test_group_reply_modifier_and_24_7_online_report_card_portal(app_env, actors):
+    from utils.security import generate_signed_report_token
+
+    cfg = app_env["config"]
+    svc = app_env["services"]
+    mgr = actors["manager"]
+    t1 = actors["teacher1"]
+    s1, s2 = actors["student1"], actors["student2"]
+
+    cls = svc.timetable.create_class(mgr, "یازدهم-گروه", "11")
+    subj = svc.timetable.create_subject(mgr, "شیمی ۲", "11", "تخصصی", default_coefficient=3.0)
+    svc.timetable.assign_subject_to_class(mgr, cls["id"], subj["id"], t1["id"], coefficient=3.0)
+    svc.timetable.enroll_student_in_class(mgr, cls["id"], s1["id"])
+    svc.timetable.enroll_student_in_class(mgr, cls["id"], s2["id"])
+
+    # ثبت نمره پایانی ۱۹ برای اطمینان از دست‌نخورده ماندن پایانی پس از مثبت/منفی درسی در گروه
+    evals = {e["name"]: e for e in svc.grades.grades.list_evaluation_types()}
+    final_row = svc.grades.record_grade(t1, s1["id"], cls["id"], subj["id"], evals["آزمون پایان‌ترم اول"]["id"], 19.0)
+
+    client, _ = build_bot_client(cfg, svc)
+    bot_messages: List[Dict[str, Any]] = []
+
+    async def fake_execute(method: str, service: str, json: bool = None, **data):
+        if service == "sendMessage":
+            bot_messages.append({"chat_id": data.get("chat_id"), "text": data.get("text", "")})
+            return {"message_id": len(bot_messages), "chat": {"id": data.get("chat_id"), "type": "group"}, "text": data.get("text")}
+        return True
+
+    client.execute = fake_execute
+
+    async def scenario():
+        await client.initialize()
+        try:
+            # ۱. ریپلای دبیر روی پیام دانش‌آموز با دستور «مثبت درسی» در گروه کلاس
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 201,
+                    "message": {
+                        "message_id": 5001,
+                        "from": {"id": t1["bale_user_id"], "first_name": "دبیر"},
+                        "chat": {"id": -100777, "type": "group"},
+                        "reply_to_message": {
+                            "message_id": 5000,
+                            "from": {"id": s1["bale_user_id"], "first_name": "دانش‌آموز"},
+                            "chat": {"id": -100777, "type": "group"},
+                            "text": "پاسخ تمرین اول",
+                        },
+                        "text": "مثبت درسی",
+                    },
+                },
+            )
+            # ۲. ریپلای دبیر با دستور «منفی درسی» روی پیام همان دانش‌آموز
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 202,
+                    "message": {
+                        "message_id": 5002,
+                        "from": {"id": t1["bale_user_id"], "first_name": "دبیر"},
+                        "chat": {"id": -100777, "type": "group"},
+                        "reply_to_message": {
+                            "message_id": 5000,
+                            "from": {"id": s1["bale_user_id"], "first_name": "دانش‌آموز"},
+                            "chat": {"id": -100777, "type": "group"},
+                            "text": "پاسخ تمرین اول",
+                        },
+                        "text": "منفی درسی",
+                    },
+                },
+            )
+            # ۳. تلاش دانش‌آموز دیگر برای دادن «مثبت درسی» باید رد شود
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 203,
+                    "message": {
+                        "message_id": 5003,
+                        "from": {"id": s2["bale_user_id"], "first_name": "دانش‌آموز۲"},
+                        "chat": {"id": -100777, "type": "group"},
+                        "reply_to_message": {
+                            "message_id": 5000,
+                            "from": {"id": s1["bale_user_id"], "first_name": "دانش‌آموز"},
+                            "chat": {"id": -100777, "type": "group"},
+                            "text": "پاسخ",
+                        },
+                        "text": "مثبت درسی",
+                    },
+                },
+            )
+            # ۴. درخواست لینک کارنامه آنلاین وب توسط دانش‌آموز در ربات
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 204,
+                    "callback_query": {
+                        "id": "cb_online_rc",
+                        "from": {"id": s1["bale_user_id"], "first_name": "دانش‌آموز"},
+                        "message": {"message_id": 5010, "chat": {"id": s1["bale_user_id"], "type": "private"}, "text": "کارنامه"},
+                        "data": f"grd:web_link:{s1['id']}",
+                    },
+                },
+            )
+            await asyncio.sleep(0.2)
+        finally:
+            await client.shutdown()
+
+    asyncio.run(scenario())
+
+    group_texts = "\n".join(m["text"] for m in bot_messages if m["chat_id"] == -100777)
+    assert "مثبت درسی (+۱ نمره مستمر) ثبت شد" in group_texts
+    assert "منفی درسی (-۱ نمره مستمر) ثبت شد" in group_texts
+    assert "⛔" in group_texts
+    assert svc.grades.grades.get_by_id(final_row["id"])["score"] == 19.0
+
+    priv_texts = "\n".join(m["text"] for m in bot_messages if m["chat_id"] == s1["bale_user_id"])
+    assert "/online-card/" in priv_texts
+
+    # ۵. تست کارنامه آنلاین تحت وب با لینک امضاشده و درگاه ۲۴ ساعته دانش‌آموز (/student-portal)
+    app = create_web_app(cfg, svc)
+    wc = app.test_client()
+
+    valid_token = generate_signed_report_token(cfg.web_secret_key, s1["id"])
+    r_card = wc.get(f"/online-card/{valid_token}")
+    assert r_card.status_code == 200
+    card_html = r_card.data.decode("utf-8")
+    assert "کارنامه آنلاین آموزشی" in card_html and "شیمی ۲" in card_html
+
+    assert wc.get("/online-card/tampered_bad_token").status_code == 403
+    assert wc.get(f"/online-card/{valid_token}/export/pdf").status_code == 200
+    assert wc.get(f"/online-card/{valid_token}/export/xlsx").status_code == 200
+
+    # ورود مستقیم دانش‌آموز به /student-portal با کد دانش‌آموزی و رمز کارنامه آنلاین
+    svc.registration.set_web_password(s1, s1["id"], "StudentPass#1405")
+    portal_login_page = wc.get("/student-portal")
+    csrf = _extract_csrf(portal_login_page.data)
+    r_portal = wc.post(
+        "/student-portal",
+        data={"csrf_token": csrf, "identifier": s1["student_code"], "password": "StudentPass#1405"},
+        follow_redirects=True,
+    )
+    assert r_portal.status_code == 200
+    assert s1["full_name"] in r_portal.data.decode("utf-8")
+    # دانش‌آموز واردشده در پرتال کارنامه نباید به صفحات مدیریتی دسترسی پیدا کند
+    assert wc.get("/users").status_code == 302
+
+
+
 

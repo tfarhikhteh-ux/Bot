@@ -362,7 +362,7 @@ def render_table_xlsx(
 def format_report_card_text(report_card: Dict[str, Any]) -> str:
     student = report_card["student"]
     lines = [
-        f"🎓 کارنامه آموزشی: {student['full_name']}",
+        f"🎓 کارنامه آنلاین آموزشی: {student['full_name']}",
         f"🏫 کلاس: {report_card.get('class_name') or '-'} | دوره: {report_card.get('term') or 'همه دوره‌ها'}",
         "━" * 24,
     ]
@@ -374,7 +374,12 @@ def format_report_card_text(report_card: Dict[str, Any]) -> str:
     for subj in subjects:
         avg_txt = to_persian_digits(f"{subj['weighted_average_20']:.2f}")
         coef_txt = to_persian_digits(f"{subj['coefficient']:g}")
-        lines.append(f"📘 {subj['subject_name']} (ضریب {coef_txt}): میانگین {avg_txt} از ۲۰")
+        pos_c = int(subj.get("positive_count") or 0)
+        neg_c = int(subj.get("negative_count") or 0)
+        mod_badge = ""
+        if pos_c > 0 or neg_c > 0:
+            mod_badge = f" | امتیاز کلاسی مستمر: +{to_persian_digits(pos_c)} / -{to_persian_digits(neg_c)}"
+        lines.append(f"📘 {subj['subject_name']} (ضریب {coef_txt}): میانگین {avg_txt} از ۲۰{mod_badge}")
         for g in subj["items"]:
             lines.append(
                 f"   ▫️ {g['evaluation_name']}: {to_persian_digits(g['score'])} از {to_persian_digits(g['max_score'])}"
@@ -383,5 +388,5 @@ def format_report_card_text(report_card: Dict[str, Any]) -> str:
 
     gpa_txt = to_persian_digits(f"{report_card['gpa']:.2f}")
     lines.append("━" * 24)
-    lines.append(f"⭐ معدل کل وزنی (از ۲۰): {gpa_txt}")
+    lines.append(f"⭐ معدل کل وزنی لحظه‌ای (از ۲۰): {gpa_txt}")
     return "\n".join(lines)

@@ -547,3 +547,60 @@ class RegistrationService:
             description="ورود موفق به پنل وب",
         )
         return refreshed
+
+    def authenticate_student_portal(
+        self,
+        identifier: str,
+        password: str,
+        max_attempts: int = 5,
+        lockout_minutes: int = 15,
+        ip_address: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """احراز هویت امن درگاه کارنامه آنلاین دانش‌آموز و ولی با کد دانش‌آموزی یا شناسه بله."""
+        ident = (identifier or "").strip()
+        user = self.users.get_by_student_code(ident) if ident else None
+        if not user and ident.isdigit():
+            user = self.users.get_by_bale_id(int(ident))
+
+        now_str = now_iso()
+        if not user or not user.get("is_active") or user["role"] not in {"STUDENT", "PARENT"}:
+            self.audit.log(
+                action="PORTAL_LOGIN_FAILED",
+                entity_type="AUTH",
+                result="FAILURE",
+                ip_address=ip_address,
+                description=f"ورود ناموفق به درگاه کارنامه آنلاین ({ident[:20]})",
+            )
+            raise AccessDeniedError("کد دانش‌آموزی/شناسه کاربری یا رمز کارنامه آنلاین نادرست است.")
+
+        if user.get("locked_until") and user["locked_until"] > now_str:
+            raise AccessDeniedError("حساب شما به دلیل تلاش‌های ناموفق متوالی موقتاً قفل شده است. چند دقیقه دیگر تلاش کنید.")
+
+        if not verify_password(user.get("web_password_hash"), password):
+            fails = int(user.get("failed_web_logins") or 0) + 1
+            locked_until = None
+            if fails >= max_attempts:
+                locked_until = (now_tehran() + timedelta(minutes=lockout_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
+            self.users.update_fields(user["id"], failed_web_logins=fails, locked_until=locked_until)
+            self.audit.log(
+                action="PORTAL_LOGIN_FAILED",
+                entity_type="AUTH",
+                actor=user,
+                result="FAILURE",
+                ip_address=ip_address,
+                description=f"رمز نادرست در درگاه کارنامه آنلاین (تلاش {fails})",
+            )
+            raise AccessDeniedError("کد دانش‌آموزی/شناسه کاربری یا رمز کارنامه آنلاین نادرست است.")
+
+        self.users.update_fields(user["id"], failed_web_logins=0, locked_until=None)
+        refreshed = self.users.get_by_id(user["id"])
+        self.audit.log(
+            action="PORTAL_LOGIN_SUCCESS",
+            entity_type="AUTH",
+            actor=refreshed,
+            result="SUCCESS",
+            ip_address=ip_address,
+            description="ورود موفق به درگاه کارنامه آنلاین",
+        )
+        return refreshed
+

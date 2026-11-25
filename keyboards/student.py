@@ -71,7 +71,14 @@ def timetable_view_options_inline(class_id: int) -> InlineKeyboard:
 def report_card_export_inline(student_id: int) -> InlineKeyboard:
     return InlineKeyboard(
         [
+            InlineKeyboardButton("🌐 لینک کارنامه آنلاین (وب)", callback_data=f"grd:web_link:{student_id}"),
+            InlineKeyboardButton("🔄 بروزرسانی لحظه‌ای", callback_data=f"grd:refresh:{student_id}"),
+        ],
+        [
             InlineKeyboardButton("📄 دانلود کارنامه (PDF)", callback_data=f"grd:rc_pdf:{student_id}"),
             InlineKeyboardButton("📗 دانلود کارنامه اکسل (XLSX)", callback_data=f"grd:rc_xlsx:{student_id}"),
-        ]
+        ],
+        [
+            InlineKeyboardButton("🔑 تنظیم رمز درگاه کارنامه آنلاین", callback_data="grd:set_portal_pw"),
+        ],
     )

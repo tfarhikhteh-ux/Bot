@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}درگاه کارنامه آنلاین دانش‌آموزان و اولیا{% endblock %}
+{% block public_content %}
+<div class="card auth-box">
+  <h2>🎓 درگاه ۲۴ ساعته کارنامه آنلاین</h2>
+  <p style="color:#64748b;font-size:0.88rem;">
+    کد دانش‌آموزی (یا شناسه عددی بله) و رمز کارنامه آنلاین خود را وارد کنید.<br>
+    <small>💡 رمز خود را می‌توانید هر زمان از داخل ربات بله در بخش «کارنامه» تنظیم کنید یا مستقیم از «لینک کارنامه آنلاین» ربات وارد شوید.</small>
+  </p>
+  <form method="post" action="{{ url_for('academic.student_portal') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="margin-bottom:12px;">
+      <label>کد دانش‌آموزی یا شناسه بله:</label><br>
+      <input type="text" name="identifier" required style="width:100%;" autocomplete="username">
+    </div>
+    <div style="margin-bottom:16px;">
+      <label>رمز کارنامه آنلاین:</label><br>
+      <input type="password" name="password" required style="width:100%;" autocomplete="current-password">
+    </div>
+    <button type="submit" style="width:100%;">مشاهده کارنامه آنلاین</button>
+  </form>
+</div>
+{% endblock %}

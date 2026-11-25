@@ -398,3 +398,26 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 CREATE INDEX IF NOT EXISTS idx_audit_created_action ON audit_logs(created_at DESC, action);
 CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS continuous_modifiers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+    subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    teacher_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    academic_term TEXT NOT NULL,
+    delta REAL NOT NULL CHECK (delta != 0),
+    old_score REAL NOT NULL,
+    new_score REAL NOT NULL,
+    note TEXT,
+    source_chat_id INTEGER,
+    source_message_id INTEGER,
+    created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_continuous_mod_unique_msg
+    ON continuous_modifiers(source_chat_id, source_message_id)
+    WHERE source_chat_id IS NOT NULL AND source_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_continuous_mod_student
+    ON continuous_modifiers(student_user_id, academic_term, subject_id);
+

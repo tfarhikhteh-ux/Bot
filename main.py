@@ -57,6 +57,7 @@ def build_bot_client(config: AppConfig, services: ServiceContainer) -> Tuple[Saf
             window_seconds=config.rate_limit_window_seconds,
         ),
         dup_guard=DuplicateActionGuard(cooldown_seconds=3.0),
+        web_secret_key=config.web_secret_key,
     )
     register_all_handlers(client, ctx)
     return client, ctx

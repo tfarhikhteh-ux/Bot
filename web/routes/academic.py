@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import io
 
-from flask import Blueprint, flash, g, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, send_file, session, url_for
 
 from services import AccessDeniedError
 from utils.dates import PERSIAN_WEEKDAYS, today_iso
+from utils.security import verify_signed_report_token
 from utils.validators import ValidationError
 from web.auth import get_services, login_required
 
@@ -282,3 +283,130 @@ def grades_page():
         report_card=report_card,
         selected_student_id=selected_student_id,
     )
+
+
+# ---------- درگاه ۲۴ ساعته کارنامه آنلاین دانش‌آموزان و اولیا ----------
+@academic_bp.route("/online-card/<token>")
+def online_card_by_token(token: str):
+    student_id = verify_signed_report_token(current_app.secret_key, token)
+    if student_id is None:
+        abort(403, description="لینک کارنامه آنلاین نامعتبر است یا مهلت زمانی آن به پایان رسیده است.")
+    svc = get_services()
+    try:
+        rc = svc.grades.get_student_report_card(None, student_id, trusted_token_access=True)
+    except ValidationError as exc:
+        abort(403, description=str(exc))
+    return render_template(
+        "online_report_card.html",
+        report_card=rc,
+        pdf_url=url_for("academic.online_card_token_export", token=token, fmt="pdf"),
+        xlsx_url=url_for("academic.online_card_token_export", token=token, fmt="xlsx"),
+        children=[],
+        portal_user=None,
+    )
+
+
+@academic_bp.route("/online-card/<token>/export/<fmt>")
+def online_card_token_export(token: str, fmt: str):
+    student_id = verify_signed_report_token(current_app.secret_key, token)
+    if student_id is None:
+        abort(403, description="لینک کارنامه آنلاین نامعتبر یا منقضی است.")
+    svc = get_services()
+    fmt_clean = "xlsx" if fmt.lower() == "xlsx" else "pdf"
+    data = svc.grades.export_student_report_card(None, student_id, fmt=fmt_clean, trusted_token_access=True)
+    mime = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if fmt_clean == "xlsx"
+        else "application/pdf"
+    )
+    return send_file(io.BytesIO(data), mimetype=mime, as_attachment=True, download_name=f"report_card_{student_id}.{fmt_clean}")
+
+
+@academic_bp.route("/student-portal", methods=["GET", "POST"])
+def student_portal():
+    svc = get_services()
+    portal_uid = session.get("portal_user_id")
+    portal_user = svc.registration.users.get_by_id(int(portal_uid)) if portal_uid else None
+    if portal_user and (not portal_user.get("is_active") or portal_user["role"] not in {"STUDENT", "PARENT"}):
+        session.pop("portal_user_id", None)
+        portal_user = None
+
+    if request.method == "POST":
+        ip = request.remote_addr or "unknown"
+        limiter = current_app.config["LOGIN_RATE_LIMITER"]
+        if not limiter.allow(f"portal_login:{ip}"):
+            flash("تعداد تلاش‌های ورود بیش از حد مجاز است. کمی بعد تلاش کنید.", "danger")
+            return render_template("student_portal_login.html"), 429
+
+        identifier = (request.form.get("identifier") or "").strip()
+        password = request.form.get("password") or ""
+        try:
+            logged_in = svc.registration.authenticate_student_portal(
+                identifier=identifier,
+                password=password,
+                max_attempts=int(current_app.config.get("WEB_MAX_LOGIN_ATTEMPTS", 5)),
+                lockout_minutes=int(current_app.config.get("WEB_LOCKOUT_MINUTES", 15)),
+                ip_address=ip,
+            )
+            session["portal_user_id"] = logged_in["id"]
+            return redirect(url_for("academic.student_portal"))
+        except AccessDeniedError as exc:
+            flash(str(exc), "danger")
+            return render_template("student_portal_login.html"), 401
+
+    if not portal_user:
+        return render_template("student_portal_login.html")
+
+    children = []
+    if portal_user["role"] == "STUDENT":
+        target_student_id = portal_user["id"]
+    else:
+        children = svc.registration.users.get_children_of_parent(portal_user["id"])
+        if not children:
+            flash("هنوز دانش‌آموزی به حساب ولی شما متصل نشده است.", "danger")
+            return render_template("student_portal_login.html")
+        req_child = request.args.get("child_id", type=int)
+        valid_ids = {c["id"] for c in children}
+        target_student_id = req_child if req_child in valid_ids else children[0]["id"]
+
+    try:
+        rc = svc.grades.get_student_report_card(portal_user, target_student_id)
+    except (ValidationError, AccessDeniedError) as exc:
+        abort(403, description=str(exc))
+
+    return render_template(
+        "online_report_card.html",
+        report_card=rc,
+        pdf_url=url_for("academic.student_portal_export", student_id=target_student_id, fmt="pdf"),
+        xlsx_url=url_for("academic.student_portal_export", student_id=target_student_id, fmt="xlsx"),
+        children=children,
+        portal_user=portal_user,
+    )
+
+
+@academic_bp.route("/student-portal/export/<int:student_id>/<fmt>")
+def student_portal_export(student_id: int, fmt: str):
+    svc = get_services()
+    portal_uid = session.get("portal_user_id")
+    portal_user = svc.registration.users.get_by_id(int(portal_uid)) if portal_uid else None
+    if not portal_user or not portal_user.get("is_active"):
+        return redirect(url_for("academic.student_portal"))
+    fmt_clean = "xlsx" if fmt.lower() == "xlsx" else "pdf"
+    try:
+        data = svc.grades.export_student_report_card(portal_user, student_id, fmt=fmt_clean)
+    except (ValidationError, AccessDeniedError) as exc:
+        abort(403, description=str(exc))
+    mime = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if fmt_clean == "xlsx"
+        else "application/pdf"
+    )
+    return send_file(io.BytesIO(data), mimetype=mime, as_attachment=True, download_name=f"report_card_{student_id}.{fmt_clean}")
+
+
+@academic_bp.route("/student-portal/logout", methods=["POST"])
+def student_portal_logout():
+    session.pop("portal_user_id", None)
+    flash("از درگاه کارنامه آنلاین خارج شدید.", "info")
+    return redirect(url_for("academic.student_portal"))
+

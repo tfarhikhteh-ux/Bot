@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import io
+import re
+from typing import Optional, Tuple
 
 from balethon import Client
-from balethon.conditions import equals, private
+from balethon.conditions import Condition, equals, private
 from balethon.objects import CallbackQuery, InlineKeyboard, InlineKeyboardButton, Message
 
 from keyboards.admin import BTN_GRADES_MGMT
@@ -16,17 +18,149 @@ from keyboards.student import (
     report_card_export_inline,
 )
 from keyboards.teacher import BTN_TEACHER_GRADES, BTN_TEACHER_HOMEWORK
-from utils.dates import format_jalali_date
+from services.grade_service import AmbiguousTeacherSubjectError
+from utils.dates import format_jalali_date, to_persian_digits
 from utils.formatters import format_report_card_text
 from utils.helpers import safe_answer_callback, send_chunked_message
+from utils.security import generate_signed_report_token
 from utils.validators import ValidationError
 
 from . import BotContext, cb_prefix
 
 FLOW_GRADES = "GRADES_FLOW"
 
+_POS_MOD_RE = re.compile(r"^(?:/?مثبت(?:[_\s]+درسی)?|\+[1۱]\s*درسی)(?:\s*(?:\||\s)\s*(.+))?$")
+_NEG_MOD_RE = re.compile(r"^(?:/?منفی(?:[_\s]+درسی)?|-[1۱]\s*درسی)(?:\s*(?:\||\s)\s*(.+))?$")
+
+
+def _parse_continuous_modifier_text(text: Optional[str]) -> Optional[Tuple[float, Optional[str], Optional[str]]]:
+    """تشخیص دستور «مثبت درسی» (+1) یا «منفی درسی» (-1) همراه با نام درس یا توضیح اختیاری."""
+    if not text:
+        return None
+    cleaned = text.strip()
+    # حالت صریح «مثبت درسی» و «منفی درسی» (و معادل اسلش‌دار /مثبت_درسی و /منفی_درسی)
+    for pattern, delta in ((_POS_MOD_RE, 1.0), (_NEG_MOD_RE, -1.0)):
+        # برای جلوگیری از تداخل با کلمات عادی تک‌کلمه‌ای، فرم بدون اسلش حتماً شامل «درسی» است
+        if not cleaned.startswith("/") and "درسی" not in cleaned:
+            continue
+        m = pattern.match(cleaned)
+        if m:
+            tail = (m.group(1) or "").strip()
+            if not tail:
+                return delta, None, None
+            if "|" in tail:
+                sub_parts = [p.strip() for p in tail.split("|", 1)]
+                return delta, (sub_parts[0] or None), (sub_parts[1] or None)
+            return delta, tail, None
+    return None
+
+
+def _continuous_modifier_condition() -> Condition:
+    class _ModCond(Condition):
+        def __init__(self) -> None:
+            super().__init__(can_process=Message)
+
+        async def __call__(self, client, event: Message) -> bool:
+            return _parse_continuous_modifier_text(event.text) is not None
+
+    return _ModCond()
+
+
+def _format_modifier_result(res: dict) -> str:
+    is_pos = res["delta"] > 0
+    header = "➕ مثبت درسی (+۱ نمره مستمر) ثبت شد" if is_pos else "➖ منفی درسی (-۱ نمره مستمر) ثبت شد"
+    old_txt = to_persian_digits(f"{res['old_score']:g}")
+    new_txt = to_persian_digits(f"{res['new_score']:g}")
+    max_txt = to_persian_digits(f"{res['max_score']:g}")
+    pos_txt = to_persian_digits(res["positive_count"])
+    neg_txt = to_persian_digits(res["negative_count"])
+    return (
+        f"{header}\n"
+        f"👤 دانش‌آموز: {res['student']['full_name']}\n"
+        f"🏫 کلاس: {res['class_name']} | 📘 درس: {res['subject_name']}\n"
+        f"📌 نوع اعمال: {res['evaluation_name']} (فقط مستمر — بدون تغییر در پایانی)\n"
+        f"⭐ نمره مستمر: {old_txt} ← {new_txt} از {max_txt}\n"
+        f"📊 جمع امتیازات کلاسی این درس: +{pos_txt} / -{neg_txt}"
+    )
+
 
 def register(client: Client, ctx: BotContext) -> None:
+    @client.on_message(_continuous_modifier_condition())
+    async def continuous_modifier_reply_handler(*, client: Client, message: Message):
+        async def _run(actor):
+            parsed = _parse_continuous_modifier_text(message.text)
+            if not parsed:
+                return
+            delta, subject_hint, note = parsed
+            if not message.reply_to_message or not message.reply_to_message.author:
+                await message.reply(
+                    "⚠️ برای ثبت «مثبت درسی» یا «منفی درسی»، باید روی پیام دانش‌آموز موردنظر ریپلای (Reply) کنید."
+                )
+                return
+
+            target_bale_id = int(message.reply_to_message.author.id)
+            student = ctx.users_repo.get_by_bale_id(target_bale_id)
+            if not student or student["role"] != "STUDENT" or not student["is_active"]:
+                raise ValidationError("کاربری که روی پیام او ریپلای کرده‌اید به عنوان دانش‌آموز فعال در سامانه ثبت نشده است.")
+
+            try:
+                res = ctx.services.grades.apply_continuous_modifier(
+                    actor=actor,
+                    student_user_id=student["id"],
+                    delta=delta,
+                    subject_hint=subject_hint,
+                    note=note,
+                    source_chat_id=int(message.chat.id) if message.chat else None,
+                    source_message_id=int(message.id) if message.id else None,
+                )
+                await message.reply(_format_modifier_result(res))
+                await ctx.flush_notifications(client)
+            except AmbiguousTeacherSubjectError as amb:
+                sign_code = "pos" if amb.delta > 0 else "neg"
+                kb = InlineKeyboard()
+                for cs in amb.subjects:
+                    btn_label = f"{'➕ مثبت' if amb.delta > 0 else '➖ منفی'} درسی: {cs['subject_name']}"
+                    kb.add_row(
+                        InlineKeyboardButton(
+                            btn_label,
+                            callback_data=f"cmod:{actor['bale_user_id']}:{amb.student['id']}:{cs['subject_id']}:{sign_code}:{message.id or 0}",
+                        )
+                    )
+                await message.reply(
+                    f"👨‍🏫 شما در کلاس «{amb.cls['name']}» بیش از یک درس تدریس می‌کنید؛ درس موردنظر برای اعمال روی نمره مستمر «{amb.student['full_name']}» را انتخاب کنید:",
+                    reply_markup=kb,
+                )
+
+        await ctx.run_safe_message(client, message, _run)
+
+    @client.on_callback_query(cb_prefix("cmod:"))
+    async def continuous_modifier_subject_callback(*, client: Client, callback_query: CallbackQuery):
+        async def _run(actor):
+            parts = callback_query.data.split(":")
+            expected_bale_id = int(parts[1])
+            student_id = int(parts[2])
+            subject_id = int(parts[3])
+            delta = 1.0 if parts[4] == "pos" else -1.0
+            src_msg_id = int(parts[5]) if len(parts) > 5 and int(parts[5]) > 0 else None
+
+            if int(callback_query.author.id) != expected_bale_id:
+                await safe_answer_callback(callback_query, "⛔ این دکمه فقط مخصوص دبیر صادرکننده دستور است.", show_alert=True)
+                return
+
+            res = ctx.services.grades.apply_continuous_modifier(
+                actor=actor,
+                student_user_id=student_id,
+                delta=delta,
+                subject_id=subject_id,
+                source_chat_id=int(callback_query.message.chat.id) if src_msg_id else None,
+                source_message_id=src_msg_id,
+            )
+            await safe_answer_callback(callback_query, "در نمره مستمر ثبت شد.")
+            await callback_query.message.edit_text(_format_modifier_result(res))
+            await ctx.flush_notifications(client)
+
+        await ctx.run_safe_callback(client, callback_query, _run, sensitive=True)
+
     @client.on_command(name="کارنامه")
     async def report_card_cmd(*_args, client: Client, message: Message):
         await _open_grades_view(client, message, ctx)
@@ -84,6 +218,35 @@ def register(client: Client, ctx: BotContext) -> None:
                 bio.name = f"report_card_{stu_id}.{fmt}"
                 await safe_answer_callback(callback_query, f"فایل {fmt.upper()} کارنامه آماده شد.")
                 await client.send_document(chat_id, bio, caption=f"🎓 کارنامه رسمی دانش‌آموز ({fmt.upper()})")
+            elif action == "refresh":
+                stu_id = int(parts[2])
+                rc = ctx.services.grades.get_student_report_card(actor, stu_id)
+                await safe_answer_callback(callback_query, "کارنامه بروزرسانی شد.")
+                await send_chunked_message(client, chat_id, format_report_card_text(rc))
+            elif action == "web_link":
+                stu_id = int(parts[2])
+                ctx.services.permissions.ensure_can_access_student(actor, stu_id)
+                if not ctx.web_secret_key:
+                    raise ValidationError("کلید امنیتی پنل وب تنظیم نشده است.")
+                token = generate_signed_report_token(ctx.web_secret_key, stu_id, ttl_seconds=86400)
+                base_url = ctx.services.notifications.settings.get("public_web_url", "http://127.0.0.1:5000").rstrip("/")
+                link = f"{base_url}/online-card/{token}"
+                await safe_answer_callback(callback_query, "لینک کارنامه آنلاین ساخته شد.")
+                await client.send_message(
+                    chat_id,
+                    f"🌐 لینک اختصاصی کارنامه آنلاین (معتبر به مدت ۲۴ ساعت):\n{link}\n\n"
+                    f"💡 همچنین هر زمان شبانه‌روز می‌توانید از آدرس {base_url}/student-portal با کد دانش‌آموزی/شناسه بله و رمز کارنامه آنلاین خود وارد شوید.",
+                )
+            elif action == "set_portal_pw":
+                checked = ctx.services.permissions.require_active_user(actor)
+                ctx.users_repo.set_session(uid, FLOW_GRADES, "SET_PORTAL_PW", {})
+                await safe_answer_callback(callback_query, "تنظیم رمز کارنامه آنلاین")
+                await client.send_message(
+                    chat_id,
+                    f"🔑 یک رمز عبور جدید (حداقل ۸ کاراکتر) برای ورود ۲۴ ساعته به درگاه کارنامه آنلاین وب ارسال کنید:\n"
+                    f"(شناسه ورود شما: کد دانش‌آموزی {checked.get('student_code') or '-'} یا شناسه بله {checked['bale_user_id']})",
+                    reply_markup=wizard_cancel_keyboard(),
+                )
             elif action == "record":
                 evals = ctx.services.grades.grades.list_evaluation_types()
                 ev_txt = "\n".join(f"• شناسه {e['id']}: {e['name']} ({e['min_score']} تا {e['max_score']})" for e in evals)
@@ -272,3 +435,15 @@ async def _handle_grades_step(ctx: BotContext, client: Client, message: Message,
         hw = ctx.services.grades.create_homework(actor, cls["id"], subs[0]["id"], parts[2], parts[3], due_date=due)
         ctx.users_repo.clear_session(uid)
         await message.reply(f"✅ تکلیف «{hw['title']}» ثبت شد.", reply_markup=ctx.main_markup_for(actor))
+        return
+
+    if step == "SET_PORTAL_PW":
+        ctx.services.registration.set_web_password(actor, actor["id"], raw)
+        ctx.users_repo.clear_session(uid)
+        base_url = ctx.services.notifications.settings.get("public_web_url", "http://127.0.0.1:5000").rstrip("/")
+        await message.reply(
+            f"✅ رمز کارنامه آنلاین شما با موفقیت تنظیم شد.\n"
+            f"اکنون در هر ساعت شبانه‌روز می‌توانید از آدرس زیر کارنامه آنلاین خود را مشاهده و چاپ کنید:\n"
+            f"{base_url}/student-portal",
+            reply_markup=ctx.main_markup_for(actor),
+        )

@@ -89,10 +89,60 @@ def _migration_003_reporting_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_grade_history_grade ON grade_history(grade_id, created_at);")
 
 
+def _migration_004_continuous_modifiers_and_portal(conn: sqlite3.Connection) -> None:
+    ts = now_iso()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS continuous_modifiers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+            subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            teacher_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            academic_term TEXT NOT NULL,
+            delta REAL NOT NULL CHECK (delta != 0),
+            old_score REAL NOT NULL,
+            new_score REAL NOT NULL,
+            note TEXT,
+            source_chat_id INTEGER,
+            source_message_id INTEGER,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_continuous_mod_unique_msg
+            ON continuous_modifiers(source_chat_id, source_message_id)
+            WHERE source_chat_id IS NOT NULL AND source_message_id IS NOT NULL;
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_continuous_mod_student
+            ON continuous_modifiers(student_user_id, academic_term, subject_id);
+        """
+    )
+    portal_settings = [
+        ("continuous_base_score", "15", "ACADEMIC", 0),
+        ("online_report_card_enabled", "1", "ACADEMIC", 0),
+        ("public_web_url", "http://127.0.0.1:5000", "GENERAL", 0),
+    ]
+    for key, val, cat, admin_only in portal_settings:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO settings(key, value, category, admin_only, updated_at)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            (key, val, cat, admin_only, ts),
+        )
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_schema", _migration_001_initial_schema),
     (2, "002_seed_defaults", _migration_002_seed_defaults),
     (3, "003_reporting_indexes", _migration_003_reporting_indexes),
+    (4, "004_continuous_modifiers_and_portal", _migration_004_continuous_modifiers_and_portal),
 ]
 
 

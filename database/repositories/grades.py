@@ -274,3 +274,167 @@ class GradeRepository:
             """,
             (class_id, limit),
         )
+
+    # ---------- ارزشیابی مستمر و مثبت/منفی درسی ----------
+    def get_or_create_continuous_eval_type(self, academic_term: str) -> Dict[str, Any]:
+        """یافتن یا ایجاد نوع ارزیابی «مستمر» (هرگز پایانی یا میان‌ترم را انتخاب نمی‌کند)."""
+        row = self.db.fetchone(
+            """
+            SELECT * FROM evaluation_types
+            WHERE is_active = 1
+              AND name LIKE '%مستمر%'
+              AND name NOT LIKE '%پایان%'
+              AND name NOT LIKE '%نهایی%'
+              AND name NOT LIKE '%میان%'
+              AND term = ?
+            ORDER BY id ASC LIMIT 1;
+            """,
+            (academic_term,),
+        )
+        if row:
+            return row
+        fallback = self.db.fetchone(
+            """
+            SELECT * FROM evaluation_types
+            WHERE is_active = 1
+              AND name LIKE '%مستمر%'
+              AND name NOT LIKE '%پایان%'
+              AND name NOT LIKE '%نهایی%'
+              AND name NOT LIKE '%میان%'
+            ORDER BY id ASC LIMIT 1;
+            """
+        )
+        if fallback:
+            return fallback
+        return self.create_evaluation_type(
+            name=f"ارزشیابی مستمر ({academic_term})",
+            term=academic_term,
+            min_score=0.0,
+            max_score=20.0,
+            weight=1.0,
+        )
+
+    def find_student_eval_grade(
+        self,
+        student_user_id: int,
+        class_id: int,
+        subject_id: int,
+        evaluation_type_id: int,
+        academic_term: str,
+    ) -> Optional[Dict[str, Any]]:
+        row = self.db.fetchone(
+            """
+            SELECT id FROM grades
+            WHERE student_user_id = ? AND class_id = ? AND subject_id = ?
+              AND evaluation_type_id = ? AND academic_term = ? AND is_deleted = 0
+            LIMIT 1;
+            """,
+            (student_user_id, class_id, subject_id, evaluation_type_id, academic_term),
+        )
+        return self.get_by_id(int(row["id"])) if row else None
+
+    def is_modifier_message_processed(self, source_chat_id: Optional[int], source_message_id: Optional[int]) -> bool:
+        if source_chat_id is None or source_message_id is None:
+            return False
+        row = self.db.fetchone(
+            "SELECT 1 FROM continuous_modifiers WHERE source_chat_id = ? AND source_message_id = ?;",
+            (source_chat_id, source_message_id),
+        )
+        return row is not None
+
+    def record_continuous_modifier(
+        self,
+        student_user_id: int,
+        class_id: int,
+        subject_id: int,
+        teacher_user_id: int,
+        academic_term: str,
+        delta: float,
+        old_score: float,
+        new_score: float,
+        note: Optional[str] = None,
+        source_chat_id: Optional[int] = None,
+        source_message_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        mid = self.db.execute(
+            """
+            INSERT INTO continuous_modifiers(
+                student_user_id, class_id, subject_id, teacher_user_id,
+                academic_term, delta, old_score, new_score, note,
+                source_chat_id, source_message_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                student_user_id,
+                class_id,
+                subject_id,
+                teacher_user_id,
+                academic_term,
+                float(delta),
+                float(old_score),
+                float(new_score),
+                note,
+                source_chat_id,
+                source_message_id,
+                now_iso(),
+            ),
+        )
+        return self.db.fetchone("SELECT * FROM continuous_modifiers WHERE id = ?;", (mid,))
+
+    def get_student_modifier_summary(
+        self,
+        student_user_id: int,
+        academic_term: Optional[str] = None,
+    ) -> Dict[int, Dict[str, Any]]:
+        clauses = ["student_user_id = ?"]
+        params: List[Any] = [student_user_id]
+        if academic_term:
+            clauses.append("academic_term = ?")
+            params.append(academic_term)
+        rows = self.db.fetchall(
+            f"""
+            SELECT
+                subject_id,
+                SUM(CASE WHEN delta > 0 THEN 1 ELSE 0 END) AS pos_count,
+                SUM(CASE WHEN delta < 0 THEN 1 ELSE 0 END) AS neg_count,
+                SUM(delta) AS net_delta
+            FROM continuous_modifiers
+            WHERE {' AND '.join(clauses)}
+            GROUP BY subject_id;
+            """,
+            params,
+        )
+        return {
+            int(r["subject_id"]): {
+                "positive_count": int(r["pos_count"] or 0),
+                "negative_count": int(r["neg_count"] or 0),
+                "net_delta": float(r["net_delta"] or 0.0),
+            }
+            for r in rows
+        }
+
+    def list_student_modifiers(
+        self,
+        student_user_id: int,
+        academic_term: Optional[str] = None,
+        limit: int = 30,
+    ) -> List[Dict[str, Any]]:
+        clauses = ["cm.student_user_id = ?"]
+        params: List[Any] = [student_user_id]
+        if academic_term:
+            clauses.append("cm.academic_term = ?")
+            params.append(academic_term)
+        params.append(limit)
+        return self.db.fetchall(
+            f"""
+            SELECT cm.*, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
+            FROM continuous_modifiers cm
+            JOIN subjects s ON s.id = cm.subject_id
+            JOIN users u ON u.id = cm.teacher_user_id
+            JOIN classes c ON c.id = cm.class_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY cm.id DESC LIMIT ?;
+            """,
+            params,
+        )
+

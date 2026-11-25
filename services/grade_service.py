@@ -22,6 +22,23 @@ from .audit_service import AuditService
 from .permission_service import AccessDeniedError, PermissionService
 
 
+class AmbiguousTeacherSubjectError(ValidationError):
+    """زمانی که یک دبیر در یک کلاس بیش از یک درس تدریس می‌کند و باید درس موردنظر برای مثبت/منفی درسی انتخاب شود."""
+
+    def __init__(
+        self,
+        student: Dict[str, Any],
+        cls: Dict[str, Any],
+        subjects: List[Dict[str, Any]],
+        delta: float,
+    ) -> None:
+        super().__init__("شما در این کلاس بیش از یک درس دارید؛ لطفاً درس موردنظر را انتخاب کنید.")
+        self.student = student
+        self.cls = cls
+        self.subjects = subjects
+        self.delta = delta
+
+
 class GradeService:
     """مدیریت انواع ارزیابی، نمرات، محاسبه دقیق معدل وزنی، کارنامه، تکالیف و اطلاع‌رسانی والدین."""
 
@@ -232,17 +249,28 @@ class GradeService:
 
     def get_student_report_card(
         self,
-        actor: Dict[str, Any],
+        actor: Optional[Dict[str, Any]],
         student_user_id: int,
         academic_term: Optional[str] = None,
+        trusted_token_access: bool = False,
     ) -> Dict[str, Any]:
-        """محاسبه دقیق کارنامه دانش‌آموز و معدل کل وزنی (بر مبنای ۲۰ با لحاظ وزن ارزیابی‌ها و ضرایب دروس)."""
-        self.permissions.ensure_can_access_student(actor, student_user_id)
+        """محاسبه دقیق کارنامه آنلاین دانش‌آموز (تفکیک مستمر، پایانی، مثبت/منفی درسی و معدل کل وزنی از ۲۰)."""
+        if not trusted_token_access:
+            checked = self.permissions.require_active_user(actor)
+            self.permissions.ensure_can_access_student(checked, student_user_id)
+            if checked["role"].upper() in {"STUDENT", "PARENT"} and not self.settings.get_bool("online_report_card_enabled", True):
+                raise ValidationError("نمایش کارنامه آنلاین در حال حاضر توسط مدیریت مدرسه موقتاً غیرفعال شده است.")
+        else:
+            if not self.settings.get_bool("online_report_card_enabled", True):
+                raise ValidationError("نمایش کارنامه آنلاین در حال حاضر توسط مدیریت مدرسه موقتاً غیرفعال شده است.")
+
         student = self.users.get_by_id(student_user_id)
         if not student:
             raise ValidationError("دانش‌آموز یافت نشد.")
         active_cls = self.classes.get_student_active_class(student_user_id)
         items = self.grades.list_grades(student_user_id=student_user_id, academic_term=academic_term, limit=500)
+        mod_summary = self.grades.get_student_modifier_summary(student_user_id, academic_term=academic_term)
+        recent_mods = self.grades.list_student_modifiers(student_user_id, academic_term=academic_term, limit=20)
 
         grouped: Dict[int, Dict[str, Any]] = {}
         for g in items:
@@ -263,20 +291,33 @@ class GradeService:
         for sid, info in grouped.items():
             w_sum = 0.0
             w_total = 0.0
+            continuous_score: Optional[float] = None
+            final_score: Optional[float] = None
             for g in info["items"]:
+                ev_name = str(g.get("evaluation_name") or "")
                 ev_w = float(g.get("evaluation_weight") or 1.0)
                 norm20 = self._normalize_to_20(float(g["score"]), float(g["min_score"]), float(g["max_score"]))
                 w_sum += norm20 * ev_w
                 w_total += ev_w
+                if "مستمر" in ev_name and "پایان" not in ev_name and continuous_score is None:
+                    continuous_score = float(g["score"])
+                elif ("پایان" in ev_name or "نهایی" in ev_name) and final_score is None:
+                    final_score = float(g["score"])
             subj_avg_20 = round(w_sum / w_total, 2) if w_total > 0 else 0.0
             coef = info["coefficient"]
             total_weighted_sum += subj_avg_20 * coef
             total_coefficients += coef
+            m_stat = mod_summary.get(sid, {"positive_count": 0, "negative_count": 0, "net_delta": 0.0})
             subject_summaries.append(
                 {
                     "subject_id": sid,
                     "subject_name": info["subject_name"],
                     "coefficient": coef,
+                    "continuous_score": continuous_score,
+                    "final_score": final_score,
+                    "positive_count": m_stat["positive_count"],
+                    "negative_count": m_stat["negative_count"],
+                    "net_delta": m_stat["net_delta"],
                     "weighted_average_20": subj_avg_20,
                     "items": info["items"],
                 }
@@ -287,34 +328,246 @@ class GradeService:
         return {
             "student": student,
             "class_name": active_cls["name"] if active_cls else (items[0]["class_name"] if items else None),
+            "school_name": self.settings.get("school_name", "مدرسه"),
+            "academic_year": self.settings.get("academic_year", "1405-1406"),
             "term": academic_term,
             "subjects": subject_summaries,
+            "recent_modifiers": recent_mods,
             "gpa": gpa,
         }
 
     def export_student_report_card(
         self,
-        actor: Dict[str, Any],
+        actor: Optional[Dict[str, Any]],
         student_user_id: int,
         fmt: str = "pdf",
         academic_term: Optional[str] = None,
+        trusted_token_access: bool = False,
     ) -> bytes:
-        rc = self.get_student_report_card(actor, student_user_id, academic_term=academic_term)
+        rc = self.get_student_report_card(
+            actor,
+            student_user_id,
+            academic_term=academic_term,
+            trusted_token_access=trusted_token_access,
+        )
         student = rc["student"]
-        title = f"کارنامه آموزشی: {student['full_name']} | کلاس: {rc.get('class_name') or '-'} | معدل کل وزنی: {rc['gpa']:.2f} از 20"
-        headers = ["نام درس", "ضریب درس", "میانگین وزنی (از ۲۰)", "ریز نمرات ثبت‌شده"]
+        title = f"کارنامه آنلاین آموزشی: {student['full_name']} | کلاس: {rc.get('class_name') or '-'} | معدل کل وزنی: {rc['gpa']:.2f} از 20"
+        headers = ["نام درس", "ضریب", "نمره مستمر", "مثبت / منفی درسی", "نمره پایانی", "میانگین وزنی (از ۲۰)", "سایر ریز نمرات"]
         rows: List[List[Any]] = []
         for sb in rc["subjects"]:
+            mod_txt = f"+{sb['positive_count']} / -{sb['negative_count']}"
             details = " | ".join(
                 f"{g['evaluation_name']}: {g['score']:g}/{g['max_score']:g}"
                 for g in sb["items"]
             )
-            rows.append([sb["subject_name"], sb["coefficient"], sb["weighted_average_20"], details or "-"])
-        rows.append(["معدل کل وزنی", "-", rc["gpa"], f"دوره: {rc.get('term') or 'کل دوره‌ها'}"])
+            rows.append(
+                [
+                    sb["subject_name"],
+                    sb["coefficient"],
+                    sb["continuous_score"] if sb["continuous_score"] is not None else "-",
+                    mod_txt,
+                    sb["final_score"] if sb["final_score"] is not None else "-",
+                    sb["weighted_average_20"],
+                    details or "-",
+                ]
+            )
+        rows.append(["معدل کل وزنی", "-", "-", "-", "-", rc["gpa"], f"دوره: {rc.get('term') or 'کل دوره‌ها'}"])
 
         if fmt.lower() in {"xlsx", "excel"}:
             return render_table_xlsx(title, headers, rows, sheet_name="کارنامه")
-        return render_table_pdf(title, headers, rows, landscape_mode=False)
+        return render_table_pdf(title, headers, rows, landscape_mode=True)
+
+    def apply_continuous_modifier(
+        self,
+        actor: Optional[Dict[str, Any]],
+        student_user_id: int,
+        delta: float = 1.0,
+        subject_id: Optional[int] = None,
+        subject_hint: Optional[str] = None,
+        note: Optional[str] = None,
+        source_chat_id: Optional[int] = None,
+        source_message_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        اعمال «مثبت درسی» (+1) یا «منفی درسی» (-1) با ریپلای دبیر روی پیام دانش‌آموز:
+        - فقط روی «نمره مستمر» همان درسِ تخصیص‌یافته به همان دبیر اعمال می‌شود.
+        - هرگز به نمره «پایانی» یا «میان‌ترم» دست نمی‌زند.
+        """
+        checked = self.permissions.require_active_user(actor)
+        role = checked["role"].upper()
+        if role not in {"TEACHER", "ADMIN", "SCHOOL_MANAGER"}:
+            self.audit.log(
+                action="CONTINUOUS_MODIFIER_DENIED",
+                entity_type="GRADE",
+                actor=checked,
+                entity_id=student_user_id,
+                result="DENIED",
+                description="تلاش کاربر غیرمجاز برای ثبت مثبت یا منفی درسی",
+            )
+            raise AccessDeniedError("فقط دبیر درس مجاز به ثبت دستور «مثبت درسی» یا «منفی درسی» است.")
+
+        if delta == 0:
+            raise ValidationError("مقدار تغییر نمره مستمر نباید صفر باشد.")
+
+        if self.grades.is_modifier_message_processed(source_chat_id, source_message_id):
+            raise ValidationError("این پیام مثبت/منفی درسی قبلاً ثبت شده است.")
+
+        student = self.users.get_by_id(student_user_id)
+        if not student or student["role"] != "STUDENT" or not student["is_active"]:
+            raise ValidationError("کاربر ریپلای‌شده دانش‌آموز فعال سامانه نیست.")
+
+        cls = self.classes.get_student_active_class(student["id"])
+        if not cls or not cls["is_active"]:
+            raise ValidationError(f"دانش‌آموز «{student['full_name']}» در حال حاضر در هیچ کلاس فعالی ثبت نشده است.")
+
+        all_class_subjects = self.subjects.list_class_subjects(cls["id"])
+        if role == "TEACHER":
+            candidates = [cs for cs in all_class_subjects if cs.get("teacher_user_id") == checked["id"]]
+        else:
+            candidates = list(all_class_subjects)
+
+        if not candidates:
+            self.audit.log(
+                action="TEACHER_MODIFIER_SCOPE_DENIED",
+                entity_type="CLASS_SUBJECT",
+                actor=checked,
+                entity_id=f"{cls['id']}:{student['id']}",
+                result="DENIED",
+                description="تلاش دبیر غیرمرتبط برای ثبت مثبت/منفی درسی در کلاس دانش‌آموز",
+            )
+            raise AccessDeniedError(f"شما دبیر هیچ‌یک از دروس کلاس «{cls['name']}» نیستید.")
+
+        chosen_cs: Optional[Dict[str, Any]] = None
+        if subject_id is not None:
+            for cs in candidates:
+                if int(cs["subject_id"]) == int(subject_id):
+                    chosen_cs = cs
+                    break
+            if not chosen_cs:
+                raise AccessDeniedError("این درس در کلاس دانش‌آموز به شما تخصیص داده نشده است.")
+        elif subject_hint and subject_hint.strip():
+            hint = subject_hint.strip()
+            exact = [cs for cs in candidates if cs["subject_name"] == hint]
+            partial = exact or [cs for cs in candidates if hint in cs["subject_name"]]
+            if len(partial) == 1:
+                chosen_cs = partial[0]
+            elif len(partial) > 1:
+                raise AmbiguousTeacherSubjectError(student=student, cls=cls, subjects=partial, delta=delta)
+            else:
+                names = "، ".join(cs["subject_name"] for cs in candidates)
+                raise ValidationError(f"درس «{hint}» در دروس شما برای کلاس {cls['name']} یافت نشد. دروس مجاز شما: {names}")
+        elif len(candidates) == 1:
+            chosen_cs = candidates[0]
+        else:
+            raise AmbiguousTeacherSubjectError(student=student, cls=cls, subjects=candidates, delta=delta)
+
+        term = self.settings.get("current_term", "ترم اول")
+        cont_eval = self.grades.get_or_create_continuous_eval_type(term)
+        if "پایان" in cont_eval["name"] or "نهایی" in cont_eval["name"]:
+            raise RuntimeError("خطای ایمنی: نوع ارزیابی انتخاب‌شده نباید پایانی باشد.")
+
+        existing_grade = self.grades.find_student_eval_grade(
+            student_user_id=student["id"],
+            class_id=cls["id"],
+            subject_id=chosen_cs["subject_id"],
+            evaluation_type_id=cont_eval["id"],
+            academic_term=term,
+        )
+
+        min_s = float(cont_eval["min_score"])
+        max_s = float(cont_eval["max_score"])
+        action_title = "مثبت درسی (+1 مستمر)" if delta > 0 else "منفی درسی (-1 مستمر)"
+        clean_note = sanitize_text(note, 200, allow_empty=True) or action_title
+        teacher_uid = chosen_cs.get("teacher_user_id") or checked["id"]
+
+        if existing_grade:
+            old_score = float(existing_grade["score"])
+            new_score = round(max(min_s, min(max_s, old_score + float(delta))), 2)
+            grade_row = self.grades.update_grade(
+                grade_id=existing_grade["id"],
+                new_score=new_score,
+                changed_by=checked["id"],
+                reason=action_title,
+                note=clean_note,
+            )
+        else:
+            try:
+                base_score = float(self.settings.get("continuous_base_score", "15") or 15.0)
+            except ValueError:
+                base_score = 15.0
+            old_score = max(min_s, min(max_s, base_score))
+            new_score = round(max(min_s, min(max_s, old_score + float(delta))), 2)
+            grade_row = self.grades.create_grade(
+                student_user_id=student["id"],
+                class_id=cls["id"],
+                subject_id=chosen_cs["subject_id"],
+                teacher_user_id=teacher_uid,
+                evaluation_type_id=cont_eval["id"],
+                academic_term=term,
+                score=new_score,
+                min_score=min_s,
+                max_score=max_s,
+                coefficient=float(chosen_cs["coefficient"]),
+                recorded_by=checked["id"],
+                note=clean_note,
+            )
+
+        self.grades.record_continuous_modifier(
+            student_user_id=student["id"],
+            class_id=cls["id"],
+            subject_id=chosen_cs["subject_id"],
+            teacher_user_id=checked["id"],
+            academic_term=term,
+            delta=float(delta),
+            old_score=old_score,
+            new_score=new_score,
+            note=clean_note,
+            source_chat_id=source_chat_id,
+            source_message_id=source_message_id,
+        )
+
+        mod_stats = self.grades.get_student_modifier_summary(student["id"], academic_term=term).get(
+            int(chosen_cs["subject_id"]),
+            {"positive_count": 0, "negative_count": 0, "net_delta": 0.0},
+        )
+
+        self.audit.log(
+            action="POSITIVE_CLASS_SCORE" if delta > 0 else "NEGATIVE_CLASS_SCORE",
+            entity_type="GRADE",
+            actor=checked,
+            entity_id=grade_row["id"],
+            before_data={"continuous_score": old_score},
+            after_data={"continuous_score": new_score, "delta": delta, "subject": chosen_cs["subject_name"]},
+            description=f"{action_title} برای {student['full_name']} در درس {chosen_cs['subject_name']}",
+        )
+
+        if self.settings.get_bool("notify_parents_grades", True):
+            badge = "➕ مثبت درسی (+۱ نمره مستمر)" if delta > 0 else "➖ منفی درسی (-۱ نمره مستمر)"
+            self._notify_parents_of_grade(
+                student,
+                chosen_cs["subject_name"],
+                f"{badge} — {cont_eval['name']}",
+                new_score,
+                max_s,
+            )
+
+        return {
+            "student": student,
+            "class_id": cls["id"],
+            "class_name": cls["name"],
+            "subject_id": chosen_cs["subject_id"],
+            "subject_name": chosen_cs["subject_name"],
+            "evaluation_name": cont_eval["name"],
+            "term": term,
+            "delta": float(delta),
+            "old_score": old_score,
+            "new_score": new_score,
+            "max_score": max_s,
+            "positive_count": mod_stats["positive_count"],
+            "negative_count": mod_stats["negative_count"],
+            "net_delta": mod_stats["net_delta"],
+            "grade_id": grade_row["id"],
+        }
 
     def get_class_performance_report(
         self,
