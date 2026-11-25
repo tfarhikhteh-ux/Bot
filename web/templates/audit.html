@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}گزارش فعالیت‌ها (Audit Log){% endblock %}
+{% block content %}
+<h2>🕵️ گزارش کامل فعالیت‌ها و ممیزی امنیتی</h2>
+
+<div class="card">
+  <form method="get" class="form-row">
+    <input type="text" name="action" value="{{ action_filter }}" placeholder="نوع عملیات (مثال: CHANGE_USER_ROLE)">
+    <select name="result">
+      <option value="">همه نتایج</option>
+      <option value="SUCCESS" {% if result_filter=='SUCCESS' %}selected{% endif %}>SUCCESS</option>
+      <option value="DENIED" {% if result_filter=='DENIED' %}selected{% endif %}>DENIED</option>
+      <option value="FAILURE" {% if result_filter=='FAILURE' %}selected{% endif %}>FAILURE</option>
+    </select>
+    <button type="submit" class="btn-secondary">فیلتر</button>
+  </form>
+
+  <table>
+    <thead><tr><th>#</th><th>زمان</th><th>کاربر</th><th>عملیات</th><th>موجودیت</th><th>نتیجه</th><th>توضیحات</th></tr></thead>
+    <tbody>
+      {% for lg in logs %}
+      <tr>
+        <td>{{ lg.id }}</td>
+        <td>{{ lg.created_at | jdatetime }}</td>
+        <td>{{ lg.actor_name or lg.actor_bale_id or 'سیستم' }}</td>
+        <td>{{ lg.action }}</td>
+        <td>{{ lg.entity_type }} ({{ lg.entity_id or '-' }})</td>
+        <td>{{ lg.result }}</td>
+        <td>{{ lg.description or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}مدیریت درس‌ها{% endblock %}
+{% block content %}
+<h2>📚 مدیریت درس‌ها و تخصیص دبیران</h2>
+
+<div class="card">
+  <h3>➕ تعریف درس جدید</h3>
+  <form method="post" class="form-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="create">
+    <input type="text" name="name" placeholder="نام درس" required>
+    <input type="text" name="grade_level" placeholder="پایه (مثال: 10)" value="عمومی" required>
+    <select name="subject_type">
+      <option value="عمومی">عمومی</option>
+      <option value="تخصصی">تخصصی</option>
+      <option value="کارگاهی">کارگاهی</option>
+      <option value="آزمایشگاه">آزمایشگاه</option>
+      <option value="فوق‌برنامه">فوق‌برنامه</option>
+    </select>
+    <input type="number" name="default_weekly_periods" value="2" min="1" max="20" placeholder="زنگ هفتگی">
+    <input type="number" step="0.5" name="default_coefficient" value="1.0" min="0.5" max="10" placeholder="ضریب">
+    <button type="submit">ثبت درس</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>📌 تخصیص درس و دبیر به کلاس</h3>
+  <form method="post" class="form-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="assign">
+    <select name="class_id" required>
+      {% for c in classes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+    </select>
+    <select name="subject_id" required>
+      {% for s in subjects if s.is_active %}<option value="{{ s.id }}">{{ s.name }} ({{ s.grade_level }})</option>{% endfor %}
+    </select>
+    <select name="teacher_user_id">
+      <option value="">-- بدون دبیر --</option>
+      {% for t in teachers %}<option value="{{ t.id }}">{{ t.full_name }}</option>{% endfor %}
+    </select>
+    <input type="number" name="weekly_periods" value="2" min="1" max="20">
+    <input type="number" step="0.5" name="coefficient" value="1.0" min="0.5" max="10">
+    <button type="submit">تخصیص به کلاس</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>📋 فهرست درس‌ها و تخصیص‌های فعال</h3>
+  <table>
+    <thead><tr><th>کلاس</th><th>درس</th><th>نوع</th><th>دبیر</th><th>زنگ هفتگی</th><th>ضریب</th></tr></thead>
+    <tbody>
+      {% for a in assignments %}
+      <tr>
+        <td>{{ a.class_name }}</td>
+        <td>{{ a.subject_name }}</td>
+        <td>{{ a.subject_type }}</td>
+        <td>{{ a.teacher_name or 'بدون دبیر' }}</td>
+        <td>{{ a.weekly_periods }}</td>
+        <td>{{ a.coefficient }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

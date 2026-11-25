@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}خطا {{ code }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>⚠️ خطای {{ code }}</h2>
+  <p>{{ message }}</p>
+  <a class="btn" href="{{ url_for('dashboard.index') }}">بازگشت به پیشخوان</a>
+</div>
+{% endblock %}
+{% block public_content %}
+<div class="card auth-box">
+  <h2>⚠️ خطای {{ code }}</h2>
+  <p>{{ message }}</p>
+  <a class="btn" href="{{ url_for('auth.login') }}">صفحه ورود</a>
+</div>
+{% endblock %}

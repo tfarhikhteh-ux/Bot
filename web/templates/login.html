@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}ورود امن به پنل مدیریت مدرسه{% endblock %}
+{% block public_content %}
+<div class="card auth-box">
+  <h2>🔐 ورود به پنل مدیریت School Bot</h2>
+  <p style="color:#64748b;font-size:0.88rem;">شناسه عددی بله و رمز عبور پنل وب خود را وارد نمایید.</p>
+  <form method="post" action="{{ url_for('auth.login') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="margin-bottom:12px;">
+      <label>شناسه کاربری بله:</label><br>
+      <input type="text" name="bale_user_id" required style="width:100%;" autocomplete="username">
+    </div>
+    <div style="margin-bottom:16px;">
+      <label>رمز عبور:</label><br>
+      <input type="password" name="password" required style="width:100%;" autocomplete="current-password">
+    </div>
+    <button type="submit" style="width:100%;">ورود به سامانه</button>
+  </form>
+</div>
+{% endblock %}

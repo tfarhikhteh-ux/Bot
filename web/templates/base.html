@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}پنل مدیریت School Bot{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if g.user %}
+<div class="layout">
+  <aside class="sidebar">
+    <h2>🏫 سامانه School Bot</h2>
+    <div class="user-badge">
+      {{ g.user.full_name }}<br>
+      <span>{{ g.user.role | role_fa }}</span>
+    </div>
+    <nav>
+      <a href="{{ url_for('dashboard.index') }}">🏠 پیشخوان</a>
+      {% if 'MANAGE_USERS' in g.permissions %}
+      <a href="{{ url_for('dashboard.users_page') }}">👥 کاربران و ثبت‌نام</a>
+      {% endif %}
+      {% if 'MANAGE_CLASSES' in g.permissions %}
+      <a href="{{ url_for('dashboard.classes_page') }}">🏫 کلاس‌ها</a>
+      {% endif %}
+      {% if 'MANAGE_SUBJECTS' in g.permissions %}
+      <a href="{{ url_for('dashboard.subjects_page') }}">📚 درس‌ها</a>
+      {% endif %}
+      <a href="{{ url_for('academic.timetable_page') }}">📅 برنامه هفتگی</a>
+      <a href="{{ url_for('academic.attendance_page') }}">📋 حضور و غیاب</a>
+      <a href="{{ url_for('academic.grades_page') }}">📊 نمرات و کارنامه</a>
+      {% if 'MANAGE_ANNOUNCEMENTS' in g.permissions %}
+      <a href="{{ url_for('operations.announcements_page') }}">📢 اطلاعیه‌ها</a>
+      {% endif %}
+      {% if 'MANAGE_HOLIDAYS' in g.permissions %}
+      <a href="{{ url_for('operations.holidays_page') }}">🗓 تعطیلات و تقویم</a>
+      {% endif %}
+      {% if 'VIEW_REPORTS_ALL' in g.permissions %}
+      <a href="{{ url_for('operations.reports_page') }}">📈 گزارش‌ها</a>
+      {% endif %}
+      {% if 'VIEW_AUDIT_LOGS' in g.permissions %}
+      <a href="{{ url_for('operations.audit_page') }}">🕵️ گزارش فعالیت‌ها</a>
+      {% endif %}
+      {% if 'MANAGE_SCHOOL_SETTINGS' in g.permissions %}
+      <a href="{{ url_for('operations.settings_page') }}">⚙️ تنظیمات و پشتیبان</a>
+      {% endif %}
+    </nav>
+    <form method="post" action="{{ url_for('auth.logout') }}" style="margin-top:18px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-danger" style="width:100%;">🚪 خروج امن</button>
+    </form>
+  </aside>
+  <main class="content">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, msg in messages %}
+        <div class="alert alert-{{ category }}">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% else %}
+<main class="content">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, msg in messages %}
+      <div class="alert alert-{{ category }}" style="max-width:400px;margin:16px auto;">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block public_content %}{% endblock %}
+</main>
+{% endif %}
+</body>
+</html>

@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}مدیریت نمرات و کارنامه{% endblock %}
+{% block content %}
+<h2>📊 مدیریت نمرات، ارزیابی‌ها و کارنامه</h2>
+
+<div class="card">
+  <form method="get" class="form-row">
+    <select name="class_id">
+      {% for c in classes %}<option value="{{ c.id }}" {% if c.id == selected_class_id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select>
+    <select name="student_id">
+      <option value="">-- مشاهده کارنامه دانش‌آموز --</option>
+      {% for s in students %}<option value="{{ s.id }}" {% if s.id == selected_student_id %}selected{% endif %}>{{ s.full_name }}</option>{% endfor %}
+    </select>
+    <button type="submit" class="btn-secondary">بارگذاری</button>
+  </form>
+</div>
+
+{% if report_card %}
+<div class="card">
+  <h3>🎓 کارنامه وزنی: {{ report_card.student.full_name }} — معدل کل: {{ "%.2f"|format(report_card.gpa) }} از ۲۰</h3>
+  <table>
+    <thead><tr><th>درس</th><th>ضریب</th><th>میانگین وزنی (از ۲۰)</th></tr></thead>
+    <tbody>
+      {% for sb in report_card.subjects %}
+      <tr><td>{{ sb.subject_name }}</td><td>{{ sb.coefficient }}</td><td>{{ "%.2f"|format(sb.weighted_average_20) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if selected_class_id and students and class_subjects %}
+<div class="card">
+  <h3>➕ ثبت نمره جدید</h3>
+  <form method="post" class="form-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="record_grade">
+    <input type="hidden" name="class_id" value="{{ selected_class_id }}">
+    <select name="student_user_id" required>
+      {% for s in students %}<option value="{{ s.id }}">{{ s.full_name }}</option>{% endfor %}
+    </select>
+    <select name="subject_id" required>
+      {% for cs in class_subjects %}<option value="{{ cs.subject_id }}">{{ cs.subject_name }}</option>{% endfor %}
+    </select>
+    <select name="evaluation_type_id" required>
+      {% for ev in eval_types %}<option value="{{ ev.id }}">{{ ev.name }} ({{ ev.min_score }} تا {{ ev.max_score }})</option>{% endfor %}
+    </select>
+    <input type="number" step="0.25" name="score" placeholder="نمره" required>
+    <input type="text" name="note" placeholder="یادداشت">
+    <button type="submit">ثبت نمره</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>📋 نمرات ثبت‌شده کلاس</h3>
+  <table>
+    <thead><tr><th>#</th><th>دانش‌آموز</th><th>درس</th><th>ارزیابی</th><th>نمره</th><th>ویرایش / حذف کنترل‌شده</th></tr></thead>
+    <tbody>
+      {% for g_item in grades_list %}
+      <tr>
+        <td>{{ g_item.id }}</td>
+        <td>{{ g_item.student_name }}</td>
+        <td>{{ g_item.subject_name }}</td>
+        <td>{{ g_item.evaluation_name }}</td>
+        <td>{{ g_item.score }} / {{ g_item.max_score }}</td>
+        <td>
+          <form method="post" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="update_grade">
+            <input type="hidden" name="class_id" value="{{ selected_class_id }}">
+            <input type="hidden" name="grade_id" value="{{ g_item.id }}">
+            <input type="number" step="0.25" name="new_score" value="{{ g_item.score }}" style="width:75px;" required>
+            <input type="text" name="reason" placeholder="علت" style="width:100px;" required>
+            <button type="submit" class="btn-secondary">اصلاح</button>
+          </form>
+          <form method="post" style="display:inline;" onsubmit="return confirm('آیا از حذف کنترل‌شده نمره مطمئن هستید؟');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="delete_grade">
+            <input type="hidden" name="class_id" value="{{ selected_class_id }}">
+            <input type="hidden" name="grade_id" value="{{ g_item.id }}">
+            <button type="submit" class="btn-danger">حذف</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
