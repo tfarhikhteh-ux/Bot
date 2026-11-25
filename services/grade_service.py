@@ -395,7 +395,7 @@ class GradeService:
         """
         checked = self.permissions.require_active_user(actor)
         role = checked["role"].upper()
-        if role not in {"TEACHER", "ADMIN", "SCHOOL_MANAGER"}:
+        if role not in {"ADMIN", "SCHOOL_MANAGER", "DEPUTY", "TEACHER", "ASSOCIATION_MEMBER"}:
             self.audit.log(
                 action="CONTINUOUS_MODIFIER_DENIED",
                 entity_type="GRADE",
@@ -404,7 +404,7 @@ class GradeService:
                 result="DENIED",
                 description="تلاش کاربر غیرمجاز برای ثبت مثبت یا منفی درسی",
             )
-            raise AccessDeniedError("فقط دبیر درس مجاز به ثبت دستور «مثبت درسی» یا «منفی درسی» است.")
+            raise AccessDeniedError("فقط کارکنان مدرسه (ادمین، مدیر، ناظم، دبیر و انجمن) مجاز به ثبت «مثبت درسی» یا «منفی درسی» هستند.")
 
         if delta == 0:
             raise ValidationError("مقدار تغییر نمره مستمر نباید صفر باشد.")

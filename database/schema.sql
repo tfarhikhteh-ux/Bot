@@ -421,3 +421,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_continuous_mod_unique_msg
 CREATE INDEX IF NOT EXISTS idx_continuous_mod_student
     ON continuous_modifiers(student_user_id, academic_term, subject_id);
 
+CREATE TABLE IF NOT EXISTS group_locks (
+    chat_id INTEGER PRIMARY KEY,
+    chat_title TEXT,
+    lock_all INTEGER NOT NULL DEFAULT 0 CHECK (lock_all IN (0, 1)),
+    lock_gif INTEGER NOT NULL DEFAULT 0 CHECK (lock_gif IN (0, 1)),
+    lock_sticker INTEGER NOT NULL DEFAULT 0 CHECK (lock_sticker IN (0, 1)),
+    lock_photo INTEGER NOT NULL DEFAULT 0 CHECK (lock_photo IN (0, 1)),
+    lock_video INTEGER NOT NULL DEFAULT 0 CHECK (lock_video IN (0, 1)),
+    lock_voice INTEGER NOT NULL DEFAULT 0 CHECK (lock_voice IN (0, 1)),
+    lock_audio INTEGER NOT NULL DEFAULT 0 CHECK (lock_audio IN (0, 1)),
+    lock_document INTEGER NOT NULL DEFAULT 0 CHECK (lock_document IN (0, 1)),
+    lock_link INTEGER NOT NULL DEFAULT 0 CHECK (lock_link IN (0, 1)),
+    lock_forward INTEGER NOT NULL DEFAULT 0 CHECK (lock_forward IN (0, 1)),
+    lock_contact INTEGER NOT NULL DEFAULT 0 CHECK (lock_contact IN (0, 1)),
+    lock_location INTEGER NOT NULL DEFAULT 0 CHECK (lock_location IN (0, 1)),
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL
+);
+
+

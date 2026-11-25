@@ -39,6 +39,10 @@ def register(client: Client, ctx: BotContext) -> None:
     async def timetable_view_cmd(*_args, client: Client, message: Message):
         await _open_role_timetable(client, message, ctx)
 
+    @client.on_command(name="timetable")
+    async def timetable_view_latin_cmd(*_args, client: Client, message: Message):
+        await _open_role_timetable(client, message, ctx)
+
     @client.on_message(private & equals(BTN_STUDENT_TIMETABLE, BTN_PARENT_TIMETABLE, BTN_TEACHER_TIMETABLE))
     async def role_timetable_btn(*, client: Client, message: Message):
         await _open_role_timetable(client, message, ctx)

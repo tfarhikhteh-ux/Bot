@@ -93,8 +93,13 @@ class SafeBaleConnection(Connection):
         return response_json.get("result")
 
     async def download_file(self, file_id: str) -> bytes:
+        file_path = file_id
+        if "/" not in file_id:
+            info = await self.request("post", "getFile", json={"file_id": file_id})
+            if isinstance(info, dict) and info.get("file_path"):
+                file_path = str(info["file_path"])
         try:
-            response = await self.client.get(self.file_url(file_id), timeout=self.time_out)
+            response = await self.client.get(self.file_url(file_path), timeout=self.time_out)
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise TransientGatewayError("خطای شبکه هنگام دریافت فایل از بله") from exc
         if response.status_code != 200:
@@ -105,6 +110,16 @@ class SafeBaleConnection(Connection):
                 desc = f"HTTP {response.status_code}"
             raise RPCError.create(response.status_code, desc, "downloadFile", {})
         return response.read()
+
+
+DEFAULT_BALE_COMMANDS = [
+    {"command": "start", "description": "شروع و نمایش منوی اصلی سامانه مدرسه"},
+    {"command": "help", "description": "فهرست کامل دستورات مجاز نقش کاربری شما"},
+    {"command": "card", "description": "مشاهده کارنامه آنلاین ۲۴ ساعته و لینک وب"},
+    {"command": "timetable", "description": "مشاهده برنامه هفتگی کلاس یا تدریس"},
+    {"command": "locks", "description": "پنل مدیریت قفل گیف و رسانه در گروه"},
+    {"command": "calendar", "description": "تقویم آموزشی و تعطیلات رسمی مدرسه"},
+]
 
 
 class SafeSchoolClient(Client):
@@ -159,6 +174,11 @@ class SafeSchoolClient(Client):
                 log.warning("تلاش مجدد اتصال اولیه ربات پس از %s ثانیه (%s)", delay, redact_sensitive_text(str(exc)))
                 await asyncio.sleep(delay)
 
+    async def set_my_commands(self, commands: Optional[list[dict]] = None) -> Any:
+        """ثبت فهرست فرمان‌های پیشنهادی بازو در بله از طریق متد رسمی setMyCommands."""
+        cmds = commands if commands is not None else DEFAULT_BALE_COMMANDS
+        return await self.execute("post", "setMyCommands", json=True, commands=cmds)
+
     async def poll_forever(self, stop_event: Optional[asyncio.Event] = None) -> None:
         try:
             await self.delete_webhook()
@@ -166,6 +186,11 @@ class SafeSchoolClient(Client):
             raise
         except Exception as exc:
             log.warning("حذف وب‌هوک قبلی با هشدار مواجه شد: %s", redact_sensitive_text(str(exc)))
+
+        try:
+            await self.set_my_commands(DEFAULT_BALE_COMMANDS)
+        except Exception as exc:
+            log.debug("ثبت خودکار setMyCommands انجام نشد: %s", redact_sensitive_text(str(exc)))
 
         await self.initialize()
         last_update_id: Optional[int] = None
@@ -209,8 +234,16 @@ class SafeSchoolClient(Client):
 
 
 async def safe_answer_callback(callback_query: CallbackQuery, text: str = "انجام شد", show_alert: bool = False) -> None:
+    """پاسخ ایمن به CallbackQuery مطابق مستندات بله (سقف ۲۰۰ کاراکتر + پشتیبانی کلاینت‌های قدیمی با شناسه شروع‌شونده با 1)."""
+    clean_text = (text or " ")[:195]
+    cb_id = str(getattr(callback_query, "id", "") or "")
+    if show_alert and cb_id.startswith("1") and getattr(callback_query, "message", None) is not None:
+        try:
+            await callback_query.message.reply(clean_text)
+        except Exception:
+            pass
     try:
-        await callback_query.answer(text=text or " ", show_alert=show_alert)
+        await callback_query.answer(text=clean_text, show_alert=show_alert)
     except Exception as exc:
         log.debug("خطای غیربحرانی در پاسخ به callback_query: %s", redact_sensitive_text(str(exc)))
 

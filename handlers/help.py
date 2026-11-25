@@ -80,10 +80,19 @@ COMMANDS_CATALOG: List[Dict[str, object]] = [
         "cmd": "مثبت درسی / منفی درسی",
         "purpose": "افزودن +۱ یا کسر -۱ از نمره مستمر (ریپلای در گروه یا فوروارد به شخصی ربات)",
         "desc": "یا در گروه روی پیام دانش‌آموز ریپلای کنید و دستور را بفرستید، یا پیام دانش‌آموز را به پی‌وی ربات فوروارد کرده و بعد دستور را ارسال نمایید (فقط روی مستمر اعمال می‌شود و پایانی تغییر نمی‌کند).",
-        "access_label": "دبیر درس / مدیر مدرسه / ادمین",
-        "example": "مثبت درسی   (یا در صورت چنددرسی بودن: منفی درسی | فیزیک)",
-        "roles": {"TEACHER", "SCHOOL_MANAGER", "ADMIN"},
+        "access_label": "ادمین / مدیر / ناظم / دبیر / انجمن",
+        "example": "مثبت درسی   (یا: منفی درسی | فیزیک)",
+        "roles": {"ADMIN", "SCHOOL_MANAGER", "DEPUTY", "TEACHER", "ASSOCIATION_MEMBER"},
         "perm": None,
+    },
+    {
+        "cmd": "قفل گیف / قفل باز گیف / قفل رسانه / پنل قفل",
+        "purpose": "بستن و باز کردن ارسال گیف، استیکر، عکس، فیلم، ویس، فایل، لینک، فوروارد و چت گروه",
+        "desc": "مدیریت کامل محدودیت‌های رسانه و پیام در گروه‌های بله (همراه با دستورات پین، حذف پین و حذف پیام با ریپلای).",
+        "access_label": "ادمین / مدیر / ناظم / دبیر / انجمن",
+        "example": "قفل گیف  |  قفل باز گیف  |  قفل رسانه  |  باز رسانه  |  پنل قفل",
+        "roles": {"ADMIN", "SCHOOL_MANAGER", "DEPUTY", "TEACHER", "ASSOCIATION_MEMBER"},
+        "perm": "MANAGE_GROUP_LOCKS",
     },
     {
         "cmd": "/حضور",
@@ -150,11 +159,14 @@ def register(client: Client, ctx: BotContext) -> None:
         async def _run(actor):
             perms = ctx.services.permissions.get_effective_permissions(actor) if actor else set()
             help_text = build_help_for_user(actor, perms)
+            is_priv = bool(
+                message.chat and str(getattr(message.chat.type, "value", message.chat.type)).lower().endswith("private")
+            )
             await send_chunked_message(
                 client,
                 message.chat.id,
                 help_text,
-                reply_markup=ctx.main_markup_for(actor) if message.chat.type == "private" else None,
+                reply_markup=ctx.main_markup_for(actor) if is_priv else None,
             )
 
         await ctx.run_safe_message(client, message, _run)

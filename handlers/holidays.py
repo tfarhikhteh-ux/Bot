@@ -46,6 +46,14 @@ def register(client: Client, ctx: BotContext) -> None:
 
         await ctx.run_safe_message(client, message, _run)
 
+    @client.on_command(name="calendar")
+    async def calendar_latin_cmd(*_args, client: Client, message: Message):
+        async def _run(actor):
+            ctx.services.permissions.require_permission(actor, "VIEW_CALENDAR", "HOLIDAY")
+            await send_chunked_message(client, message.chat.id, _format_calendar_text(ctx))
+
+        await ctx.run_safe_message(client, message, _run)
+
     @client.on_message(private & equals(BTN_VIEW_CALENDAR))
     async def view_calendar_btn(*, client: Client, message: Message):
         async def _run(actor):

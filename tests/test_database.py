@@ -42,6 +42,7 @@ def test_database_tables_and_integrity(app_env):
         "user_sessions",
         "audit_logs",
         "continuous_modifiers",
+        "group_locks",
     }
     assert expected.issubset(tables)
 
@@ -51,7 +52,7 @@ def test_migrations_are_idempotent(app_env):
     second_run = run_migrations(db)
     assert second_run == []
     versions = [r["version"] for r in db.fetchall("SELECT version FROM schema_migrations ORDER BY version;")]
-    assert versions == [1, 2, 3, 4]
+    assert versions == [1, 2, 3, 4, 5]
 
 
 def test_foreign_key_enforced(app_env):

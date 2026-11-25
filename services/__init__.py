@@ -10,6 +10,7 @@ from .attendance_service import AttendanceService
 from .audit_service import AuditService
 from .backup_service import BackupService
 from .grade_service import GradeService
+from .moderation_service import ModerationService
 from .notification_service import NotificationService
 from .permission_service import AccessDeniedError, PermissionService
 from .registration_service import RegistrationService
@@ -29,6 +30,7 @@ class ServiceContainer:
     notifications: NotificationService
     backups: BackupService
     reports: ReportService
+    moderation: ModerationService
 
     @classmethod
     def build(
@@ -48,6 +50,7 @@ class ServiceContainer:
         notifications = NotificationService(db, permissions, management_group_id=management_group_id)
         backups = BackupService(db, permissions, backup_dir=backup_dir, default_retention=backup_retention_count)
         reports = ReportService(db, permissions, grades)
+        moderation = ModerationService(db, permissions)
         return cls(
             db=db,
             audit=audit,
@@ -59,6 +62,7 @@ class ServiceContainer:
             notifications=notifications,
             backups=backups,
             reports=reports,
+            moderation=moderation,
         )
 
 
@@ -68,6 +72,7 @@ __all__ = [
     "AuditService",
     "BackupService",
     "GradeService",
+    "ModerationService",
     "NotificationService",
     "PermissionService",
     "RegistrationService",

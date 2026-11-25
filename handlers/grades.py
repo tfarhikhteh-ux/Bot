@@ -205,8 +205,8 @@ def register(client: Client, ctx: BotContext) -> None:
         async def _run(actor):
             checked = ctx.services.permissions.require_active_user(actor)
             uid = int(message.author.id)
-            if checked["role"] not in {"TEACHER", "SCHOOL_MANAGER", "ADMIN"}:
-                raise ValidationError("فوروارد پیام دانش‌آموز برای ثبت مثبت/منفی درسی فقط ویژه دبیران و مدیریت است.")
+            if checked["role"] not in {"ADMIN", "SCHOOL_MANAGER", "DEPUTY", "TEACHER", "ASSOCIATION_MEMBER"}:
+                raise ValidationError("فوروارد پیام دانش‌آموز برای ثبت مثبت/منفی درسی فقط ویژه کارکنان مدرسه (ادمین، مدیر، ناظم، دبیر و انجمن) است.")
 
             # اگر کادر آموزشی در وسط یک فرم دیگر (مثلاً ثبت تکلیف) است، در آن فرم تداخل ایجاد نکنیم
             sess = ctx.users_repo.get_session(uid)
@@ -228,10 +228,12 @@ def register(client: Client, ctx: BotContext) -> None:
                     InlineKeyboardButton(
                         "➕ مثبت درسی (+۱ مستمر)",
                         callback_data=f"cmod_quick:{checked['bale_user_id']}:{student['id']}:pos:{message.id or 0}",
+                        style="success",
                     ),
                     InlineKeyboardButton(
                         "➖ منفی درسی (-۱ مستمر)",
                         callback_data=f"cmod_quick:{checked['bale_user_id']}:{student['id']}:neg:{message.id or 0}",
+                        style="danger",
                     ),
                 ]
             )
@@ -378,6 +380,10 @@ def register(client: Client, ctx: BotContext) -> None:
     async def report_card_cmd(*_args, client: Client, message: Message):
         await _open_grades_view(client, message, ctx)
 
+    @client.on_command(name="card")
+    async def report_card_latin_cmd(*_args, client: Client, message: Message):
+        await _open_grades_view(client, message, ctx)
+
     @client.on_message(private & equals(BTN_STUDENT_GRADES, BTN_PARENT_GRADES, BTN_TEACHER_GRADES, BTN_GRADES_MGMT))
     async def grades_buttons(*, client: Client, message: Message):
         await _open_grades_view(client, message, ctx)
@@ -444,11 +450,17 @@ def register(client: Client, ctx: BotContext) -> None:
                 token = generate_signed_report_token(ctx.web_secret_key, stu_id, ttl_seconds=86400)
                 base_url = ctx.services.notifications.settings.get("public_web_url", "http://127.0.0.1:5000").rstrip("/")
                 link = f"{base_url}/online-card/{token}"
+                link_kb = InlineKeyboard()
+                if link.startswith("https://"):
+                    link_kb.add_row(InlineKeyboardButton("🌐 باز کردن کارنامه آنلاین", url=link, style="success"))
+                if 1 <= len(link) <= 256:
+                    link_kb.add_row(InlineKeyboardButton("📋 رونوشت (کپی) لینک کارنامه آنلاین", copy_text=link, style="primary"))
                 await safe_answer_callback(callback_query, "لینک کارنامه آنلاین ساخته شد.")
                 await client.send_message(
                     chat_id,
                     f"🌐 لینک اختصاصی کارنامه آنلاین (معتبر به مدت ۲۴ ساعت):\n{link}\n\n"
                     f"💡 همچنین هر زمان شبانه‌روز می‌توانید از آدرس {base_url}/student-portal با کد دانش‌آموزی/شناسه بله و رمز کارنامه آنلاین خود وارد شوید.",
+                    reply_markup=link_kb if link_kb.inline_keyboard else None,
                 )
             elif action == "set_portal_pw":
                 checked = ctx.services.permissions.require_active_user(actor)
