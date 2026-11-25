@@ -1,0 +1,38 @@
+# فایل‌های محیطی و اطلاعات حساس
+.env
+.env.*
+!.env.example
+
+# پایگاه داده واقعی و فایل‌های موقت SQLite
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# پشتیبان‌ها و لاگ‌های عملیاتی
+backups/*
+!backups/.gitkeep
+logs/*
+!logs/.gitkeep
+*.log
+*.lock
+*.pid
+
+# محیط مجازی و کش پایتون
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# فایل‌های سیستمی و موقت
+.DS_Store
+Thumbs.db
+Unselected files/
