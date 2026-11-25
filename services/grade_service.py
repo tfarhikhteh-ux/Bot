@@ -9,6 +9,7 @@ from database.repositories.grades import GradeRepository
 from database.repositories.settings import SettingsRepository
 from database.repositories.subjects import SubjectRepository
 from database.repositories.users import UserRepository
+from utils.formatters import render_table_pdf, render_table_xlsx
 from utils.validators import (
     ValidationError,
     sanitize_text,
@@ -290,6 +291,30 @@ class GradeService:
             "subjects": subject_summaries,
             "gpa": gpa,
         }
+
+    def export_student_report_card(
+        self,
+        actor: Dict[str, Any],
+        student_user_id: int,
+        fmt: str = "pdf",
+        academic_term: Optional[str] = None,
+    ) -> bytes:
+        rc = self.get_student_report_card(actor, student_user_id, academic_term=academic_term)
+        student = rc["student"]
+        title = f"کارنامه آموزشی: {student['full_name']} | کلاس: {rc.get('class_name') or '-'} | معدل کل وزنی: {rc['gpa']:.2f} از 20"
+        headers = ["نام درس", "ضریب درس", "میانگین وزنی (از ۲۰)", "ریز نمرات ثبت‌شده"]
+        rows: List[List[Any]] = []
+        for sb in rc["subjects"]:
+            details = " | ".join(
+                f"{g['evaluation_name']}: {g['score']:g}/{g['max_score']:g}"
+                for g in sb["items"]
+            )
+            rows.append([sb["subject_name"], sb["coefficient"], sb["weighted_average_20"], details or "-"])
+        rows.append(["معدل کل وزنی", "-", rc["gpa"], f"دوره: {rc.get('term') or 'کل دوره‌ها'}"])
+
+        if fmt.lower() in {"xlsx", "excel"}:
+            return render_table_xlsx(title, headers, rows, sheet_name="کارنامه")
+        return render_table_pdf(title, headers, rows, landscape_mode=False)
 
     def get_class_performance_report(
         self,

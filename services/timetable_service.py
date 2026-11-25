@@ -9,7 +9,7 @@ from database.repositories.subjects import SubjectRepository
 from database.repositories.timetable import TimetableRepository
 from database.repositories.users import UserRepository
 from utils.dates import PERSIAN_WEEKDAYS, tehran_weekday_index
-from utils.formatters import format_timetable_text, render_table_pdf, render_timetable_png, week_type_label
+from utils.formatters import format_timetable_text, render_table_pdf, render_table_xlsx, render_timetable_png, week_type_label
 from utils.validators import (
      VALID_SUBJECT_TYPES,
     ValidationError,
@@ -517,3 +517,27 @@ class TimetableService:
             rows.append(row)
         wk_txt = f" ({week_type_label(wt)})" if wt else ""
         return render_table_pdf(f"برنامه هفتگی کلاس {cls['name']}{wk_txt}", headers, rows, landscape_mode=True)
+
+    def export_class_timetable_xlsx(self, actor: Dict[str, Any], class_id: int, week_type: Optional[str] = None) -> bytes:
+        self.permissions.ensure_can_access_class(actor, class_id)
+        cls = self.classes.get_by_id(class_id)
+        if not cls:
+            raise ValidationError("کلاس یافت نشد.")
+        wt = validate_week_type(week_type) if week_type else None
+        entries = self.timetable.get_class_timetable(class_id, week_type=wt)
+        periods = self.timetable.list_bell_periods()
+        days = self.settings.get_teaching_days()
+        headers = ["روز هفته"] + [f"زنگ {p['period_number']} ({p['start_time']}-{p['end_time']})" for p in periods]
+        lookup = {}
+        for e in entries:
+            wk = "" if e["week_type"] == "BOTH" else f" [{week_type_label(e['week_type'])}]"
+            t_txt = f" ({e['teacher_name']})" if e.get("teacher_name") else ""
+            lookup.setdefault((e["day_of_week"], e["period_number"]), []).append(f"{e['subject_name']}{t_txt}{wk}")
+        rows = []
+        for d in days:
+            row = [PERSIAN_WEEKDAYS.get(d, str(d))]
+            for p in periods:
+                row.append(" / ".join(lookup.get((d, p["period_number"]), ["-"])))
+            rows.append(row)
+        wk_txt = f" ({week_type_label(wt)})" if wt else ""
+        return render_table_xlsx(f"برنامه هفتگی کلاس {cls['name']}{wk_txt}", headers, rows, sheet_name=f"کلاس {cls['name']}")

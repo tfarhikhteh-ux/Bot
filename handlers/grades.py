@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+
 from balethon import Client
 from balethon.conditions import equals, private
 from balethon.objects import CallbackQuery, InlineKeyboard, InlineKeyboardButton, Message
@@ -11,6 +13,7 @@ from keyboards.student import (
     BTN_STUDENT_GRADES,
     BTN_STUDENT_HOMEWORK,
     children_selector_inline,
+    report_card_export_inline,
 )
 from keyboards.teacher import BTN_TEACHER_GRADES, BTN_TEACHER_HOMEWORK
 from utils.dates import format_jalali_date
@@ -72,6 +75,15 @@ def register(client: Client, ctx: BotContext) -> None:
                 rc = ctx.services.grades.get_student_report_card(actor, child_id)
                 await safe_answer_callback(callback_query, "کارنامه فرزند")
                 await send_chunked_message(client, chat_id, format_report_card_text(rc))
+                await client.send_message(chat_id, "دریافت نسخه رسمی کارنامه:", reply_markup=report_card_export_inline(child_id))
+            elif action in {"rc_pdf", "rc_xlsx"}:
+                stu_id = int(parts[2])
+                fmt = "pdf" if action == "rc_pdf" else "xlsx"
+                file_bytes = ctx.services.grades.export_student_report_card(actor, stu_id, fmt=fmt)
+                bio = io.BytesIO(file_bytes)
+                bio.name = f"report_card_{stu_id}.{fmt}"
+                await safe_answer_callback(callback_query, f"فایل {fmt.upper()} کارنامه آماده شد.")
+                await client.send_document(chat_id, bio, caption=f"🎓 کارنامه رسمی دانش‌آموز ({fmt.upper()})")
             elif action == "record":
                 evals = ctx.services.grades.grades.list_evaluation_types()
                 ev_txt = "\n".join(f"• شناسه {e['id']}: {e['name']} ({e['min_score']} تا {e['max_score']})" for e in evals)
@@ -141,6 +153,7 @@ async def _open_grades_view(client: Client, message: Message, ctx: BotContext) -
         if role == "STUDENT":
             rc = ctx.services.grades.get_student_report_card(checked, checked["id"])
             await send_chunked_message(client, message.chat.id, format_report_card_text(rc))
+            await client.send_message(message.chat.id, "دریافت نسخه رسمی کارنامه:", reply_markup=report_card_export_inline(checked["id"]))
         elif role == "PARENT":
             children = ctx.users_repo.get_children_of_parent(checked["id"])
             if not children:

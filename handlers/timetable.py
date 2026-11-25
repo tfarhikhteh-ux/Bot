@@ -125,6 +125,13 @@ def register(client: Client, ctx: BotContext) -> None:
                 bio.name = f"timetable_{cid}.pdf"
                 await safe_answer_callback(callback_query, "فایل PDF آماده شد.")
                 await client.send_document(chat_id, bio, caption="📄 فایل PDF برنامه هفتگی کلاس")
+            elif action == "xlsx":
+                cid = int(parts[2])
+                xlsx_bytes = ctx.services.timetable.export_class_timetable_xlsx(actor, cid)
+                bio = io.BytesIO(xlsx_bytes)
+                bio.name = f"timetable_{cid}.xlsx"
+                await safe_answer_callback(callback_query, "فایل اکسل آماده شد.")
+                await client.send_document(chat_id, bio, caption="📗 فایل اکسل برنامه هفتگی کلاس")
             elif action == "set_wizard":
                 ctx.services.permissions.require_permission(actor, "MANAGE_TIMETABLE", "TIMETABLE")
                 ctx.users_repo.set_session(uid, FLOW_TIMETABLE, "SET_QUICK", {})

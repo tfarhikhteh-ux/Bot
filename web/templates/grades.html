@@ -19,6 +19,10 @@
 {% if report_card %}
 <div class="card">
   <h3>🎓 کارنامه وزنی: {{ report_card.student.full_name }} — معدل کل: {{ "%.2f"|format(report_card.gpa) }} از ۲۰</h3>
+  <div class="form-row" style="margin-bottom:10px;">
+    <a class="btn" href="{{ url_for('academic.export_report_card', student_id=report_card.student.id, fmt='pdf') }}">📄 دانلود کارنامه (PDF)</a>
+    <a class="btn" href="{{ url_for('academic.export_report_card', student_id=report_card.student.id, fmt='xlsx') }}">📗 دانلود کارنامه اکسل (XLSX)</a>
+  </div>
   <table>
     <thead><tr><th>درس</th><th>ضریب</th><th>میانگین وزنی (از ۲۰)</th></tr></thead>
     <tbody>

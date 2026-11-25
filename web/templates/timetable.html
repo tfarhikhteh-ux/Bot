@@ -19,6 +19,7 @@
     {% if selected_class_id %}
     <a class="btn" href="{{ url_for('academic.export_timetable', class_id=selected_class_id, fmt='png', week_type=week_filter) }}">🖼 دانلود تصویر (PNG)</a>
     <a class="btn" href="{{ url_for('academic.export_timetable', class_id=selected_class_id, fmt='pdf', week_type=week_filter) }}">📄 دانلود PDF</a>
+    <a class="btn" href="{{ url_for('academic.export_timetable', class_id=selected_class_id, fmt='xlsx', week_type=week_filter) }}">📗 دانلود اکسل (XLSX)</a>
     {% endif %}
   </form>
 </div>

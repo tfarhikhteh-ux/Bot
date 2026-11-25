@@ -14,7 +14,7 @@ from database.repositories.subjects import SubjectRepository
 from database.repositories.timetable import TimetableRepository
 from database.repositories.users import UserRepository
 from utils.dates import format_jalali_date, format_jalali_datetime
-from utils.formatters import attendance_label, render_table_pdf, role_label
+from utils.formatters import attendance_label, render_table_pdf, render_table_xlsx, role_label
 from utils.validators import validate_date
 
 from .grade_service import GradeService
@@ -256,6 +256,9 @@ class ReportService:
             ]
             title = "خلاصه گزارش مدیریتی مدرسه"
 
-        if fmt.lower() == "pdf":
+        fmt_norm = fmt.lower()
+        if fmt_norm == "pdf":
             return render_table_pdf(title, headers, rows, landscape_mode=(len(headers) > 5))
+        if fmt_norm in {"xlsx", "excel"}:
+            return render_table_xlsx(title, headers, rows, sheet_name=cat)
         return self.build_csv_bytes(headers, rows)

@@ -144,12 +144,20 @@ def reports_mgmt_inline() -> InlineKeyboard:
             InlineKeyboardButton("🏆 معدل کلاس‌ها و دبیران", callback_data="rep:academic"),
         ],
         [
-            InlineKeyboardButton("📥 خروجی CSV حضور و غیاب", callback_data="rep:csv:ATTENDANCE"),
-            InlineKeyboardButton("📄 خروجی PDF حضور و غیاب", callback_data="rep:pdf:ATTENDANCE"),
+            InlineKeyboardButton("📗 اکسل حضور و غیاب (XLSX)", callback_data="rep:xlsx:ATTENDANCE"),
+            InlineKeyboardButton("📄 PDF حضور و غیاب", callback_data="rep:pdf:ATTENDANCE"),
         ],
         [
+            InlineKeyboardButton("📗 اکسل نمرات (XLSX)", callback_data="rep:xlsx:GRADES"),
+            InlineKeyboardButton("📄 PDF نمرات", callback_data="rep:pdf:GRADES"),
+        ],
+        [
+            InlineKeyboardButton("📗 اکسل کاربران (XLSX)", callback_data="rep:xlsx:USERS"),
+            InlineKeyboardButton("📄 PDF کاربران", callback_data="rep:pdf:USERS"),
+        ],
+        [
+            InlineKeyboardButton("📥 خروجی CSV حضور و غیاب", callback_data="rep:csv:ATTENDANCE"),
             InlineKeyboardButton("📥 خروجی CSV نمرات", callback_data="rep:csv:GRADES"),
-            InlineKeyboardButton("📄 خروجی PDF نمرات", callback_data="rep:pdf:GRADES"),
         ],
         [
             InlineKeyboardButton("🕵️ گزارش تغییرات نقش/نمره/برنامه", callback_data="rep:changes"),

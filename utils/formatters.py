@@ -7,6 +7,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import arabic_reshaper
 from bidi.algorithm import get_display
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -277,6 +280,82 @@ def render_table_pdf(title: str, headers: Sequence[str], rows: Sequence[Sequence
 
     story = [Paragraph(shape_rtl(to_persian_digits(title)), title_style), Spacer(1, 8), tbl]
     doc.build(story)
+    return buf.getvalue()
+
+
+def render_table_xlsx(
+    title: str,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    sheet_name: str = "گزارش",
+) -> bytes:
+    """تولید فایل اکسل استاندارد (.xlsx) با چیدمان راست‌به‌چپ فارسی، قالب‌بندی جدول و عرض خودکار ستون‌ها."""
+    wb = Workbook()
+    ws = wb.active
+    clean_sheet = "".join(ch for ch in (sheet_name or "گزارش") if ch not in r"[]:*?/\\")[:31] or "گزارش"
+    ws.title = clean_sheet
+    ws.sheet_view.rightToLeft = True
+
+    col_count = max(len(headers), 1)
+    thin_side = Side(border_style="thin", color="CBD5E1")
+    cell_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    # ردیف ۱: عنوان گزارش
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=col_count)
+    title_cell = ws.cell(row=1, column=1, value=str(title))
+    title_cell.font = Font(name="Tahoma", size=13, bold=True, color="FFFFFF")
+    title_cell.fill = PatternFill(fill_type="solid", start_color="0F172A", end_color="0F172A")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 30
+
+    # ردیف ۲: سرستون‌ها
+    header_fill = PatternFill(fill_type="solid", start_color="1E3A8A", end_color="1E3A8A")
+    header_font = Font(name="Tahoma", size=10, bold=True, color="FFFFFF")
+    ws.row_dimensions[2].height = 24
+    for col_idx, h_text in enumerate(headers, start=1):
+        c = ws.cell(row=2, column=col_idx, value=str(h_text))
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = cell_border
+
+    # ردیف‌های داده با حفظ نوع عددی برای فرمول‌های اکسل
+    zebra_fill = PatternFill(fill_type="solid", start_color="F8FAFC", end_color="F8FAFC")
+    white_fill = PatternFill(fill_type="solid", start_color="FFFFFF", end_color="FFFFFF")
+    body_font = Font(name="Tahoma", size=10, color="0F172A")
+
+    for r_offset, row_vals in enumerate(rows, start=3):
+        ws.row_dimensions[r_offset].height = 21
+        row_fill = zebra_fill if r_offset % 2 == 0 else white_fill
+        for col_idx in range(1, col_count + 1):
+            raw_val = row_vals[col_idx - 1] if col_idx - 1 < len(row_vals) else ""
+            if raw_val is None:
+                val: Any = "-"
+            elif isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool):
+                val = raw_val
+            else:
+                val = str(raw_val)
+            cell = ws.cell(row=r_offset, column=col_idx, value=val)
+            cell.font = body_font
+            cell.fill = row_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = cell_border
+
+    # تنظیم خودکار عرض ستون‌ها
+    for col_idx in range(1, col_count + 1):
+        col_letter = get_column_letter(col_idx)
+        max_len = len(str(headers[col_idx - 1])) if col_idx - 1 < len(headers) else 10
+        for row_vals in rows:
+            if col_idx - 1 < len(row_vals) and row_vals[col_idx - 1] is not None:
+                cell_str = str(row_vals[col_idx - 1])
+                longest_line = max((len(part) for part in cell_str.splitlines()), default=0)
+                if longest_line > max_len:
+                    max_len = longest_line
+        ws.column_dimensions[col_letter].width = min(max(max_len + 6, 13), 48)
+
+    ws.freeze_panes = "A3"
+    buf = io.BytesIO()
+    wb.save(buf)
     return buf.getvalue()
 
 

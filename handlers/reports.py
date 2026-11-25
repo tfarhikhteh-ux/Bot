@@ -18,7 +18,7 @@ def register(client: Client, ctx: BotContext) -> None:
     async def reports_menu(*, client: Client, message: Message):
         async def _run(actor):
             ctx.services.permissions.require_permission(actor, "VIEW_REPORTS_ALL", "REPORT")
-            await message.reply("📈 سامانه گزارش‌های مدیریتی و خروجی‌های رسمی (CSV / PDF):", reply_markup=reports_mgmt_inline())
+            await message.reply("📈 سامانه گزارش‌های مدیریتی و خروجی‌های رسمی (اکسل XLSX / CSV / PDF):", reply_markup=reports_mgmt_inline())
 
         await ctx.run_safe_message(client, message, _run)
 
@@ -58,7 +58,7 @@ def register(client: Client, ctx: BotContext) -> None:
                     )
                 await safe_answer_callback(callback_query, "گزارش عملکرد آموزشی")
                 await send_chunked_message(client, chat_id, "\n".join(lines))
-            elif action in {"csv", "pdf"}:
+            elif action in {"xlsx", "csv", "pdf"}:
                 cat = parts[2]
                 file_bytes = ctx.services.reports.export_report(actor, category=cat, fmt=action)
                 bio = io.BytesIO(file_bytes)

@@ -127,8 +127,15 @@ def export_report_route():
         date_from=date_from,
         date_to=date_to,
     )
-    mime = "application/pdf" if fmt == "pdf" else "text/csv; charset=utf-8"
-    ext = "pdf" if fmt == "pdf" else "csv"
+    if fmt == "pdf":
+        mime = "application/pdf"
+        ext = "pdf"
+    elif fmt in {"xlsx", "excel"}:
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ext = "xlsx"
+    else:
+        mime = "text/csv; charset=utf-8"
+        ext = "csv"
     return send_file(
         io.BytesIO(data),
         mimetype=mime,

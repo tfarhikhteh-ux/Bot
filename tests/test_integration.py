@@ -374,3 +374,102 @@ def test_bot_slash_commands_timetable_grades_calendar_backup(app_env, actors):
     assert "پشتیبان‌گیری" in all_texts
 
 
+def test_excel_xlsx_and_pdf_exports_across_web_and_bot(app_env, actors):
+    import io
+    from openpyxl import load_workbook
+
+    cfg = app_env["config"]
+    svc = app_env["services"]
+    admin = actors["admin"]
+    mgr = actors["manager"]
+    t1 = actors["teacher1"]
+    s1 = actors["student1"]
+
+    cls = svc.timetable.create_class(mgr, "یازدهم-تجربی", "11")
+    subj = svc.timetable.create_subject(mgr, "زیست‌شناسی", "11", "تخصصی", default_coefficient=4.0)
+    svc.timetable.assign_subject_to_class(mgr, cls["id"], subj["id"], t1["id"], coefficient=4.0)
+    svc.timetable.enroll_student_in_class(mgr, cls["id"], s1["id"])
+    svc.timetable.set_timetable_slot(mgr, cls["id"], "شنبه", 1, "BOTH", subj["id"])
+
+    ev_id = svc.grades.grades.list_evaluation_types()[0]["id"]
+    svc.grades.record_grade(t1, s1["id"], cls["id"], subj["id"], ev_id, 19.25)
+    svc.attendance.record_attendance(t1, cls["id"], s1["id"], "PRESENT", att_date="2026-10-10", period_number=1)
+
+    # ۱. بررسی خروجی‌های اکسل (.xlsx) و PDF در پنل وب
+    svc.registration.set_web_password(admin, admin["id"], "ExcelPdf#2026")
+    app = create_web_app(cfg, svc)
+    wc = app.test_client()
+    csrf = _extract_csrf(wc.get("/login").data)
+    wc.post("/login", data={"csrf_token": csrf, "bale_user_id": str(admin["bale_user_id"]), "password": "ExcelPdf#2026"})
+
+    for xlsx_url in [
+        "/reports/export?category=USERS&fmt=xlsx",
+        f"/reports/export?category=GRADES&fmt=xlsx&class_id={cls['id']}",
+        f"/reports/export?category=ATTENDANCE&fmt=xlsx&class_id={cls['id']}",
+        f"/timetable/export/{cls['id']}/xlsx",
+        f"/grades/report-card/{s1['id']}/xlsx",
+    ]:
+        r = wc.get(xlsx_url)
+        assert r.status_code == 200, xlsx_url
+        wb = load_workbook(io.BytesIO(r.data))
+        ws = wb.active
+        assert ws.sheet_view.rightToLeft is True
+        assert ws.max_row >= 3
+
+    for pdf_url in [
+        f"/reports/export?category=GRADES&fmt=pdf&class_id={cls['id']}",
+        f"/timetable/export/{cls['id']}/pdf",
+        f"/grades/report-card/{s1['id']}/pdf",
+    ]:
+        r = wc.get(pdf_url)
+        assert r.status_code == 200 and r.data.startswith(b"%PDF")
+
+    # ۲. بررسی ارسال فایل‌های اکسل (.xlsx) و PDF در ربات بله
+    client, _ = build_bot_client(cfg, svc)
+    sent_docs: List[str] = []
+
+    async def fake_execute(method: str, service: str, json: bool = None, **data):
+        if service == "sendDocument":
+            doc_obj = data.get("document")
+            sent_docs.append(getattr(doc_obj, "name", "unknown"))
+            return {"message_id": len(sent_docs), "chat": {"id": data.get("chat_id"), "type": "private"}}
+        return {"message_id": 1, "chat": {"id": data.get("chat_id", 1), "type": "private"}, "text": "ok"}
+
+    client.execute = fake_execute
+
+    async def scenario():
+        await client.initialize()
+        try:
+            callbacks = [
+                (mgr["bale_user_id"], "rep:xlsx:GRADES"),
+                (mgr["bale_user_id"], "rep:pdf:GRADES"),
+                (s1["bale_user_id"], f"tt:xlsx:{cls['id']}"),
+                (s1["bale_user_id"], f"grd:rc_xlsx:{s1['id']}"),
+                (s1["bale_user_id"], f"grd:rc_pdf:{s1['id']}"),
+            ]
+            for idx, (uid, cb_data) in enumerate(callbacks, start=90):
+                await client.dispatcher.dispatch_raw_update(
+                    client,
+                    {
+                        "update_id": idx,
+                        "callback_query": {
+                            "id": f"cb_exp_{idx}",
+                            "from": {"id": uid, "first_name": "کاربر"},
+                            "message": {"message_id": idx * 10, "chat": {"id": uid, "type": "private"}, "text": "منو"},
+                            "data": cb_data,
+                        },
+                    },
+                )
+            await asyncio.sleep(0.2)
+        finally:
+            await client.shutdown()
+
+    asyncio.run(scenario())
+    assert "school_report_grades.xlsx" in sent_docs
+    assert "school_report_grades.pdf" in sent_docs
+    assert f"timetable_{cls['id']}.xlsx" in sent_docs
+    assert f"report_card_{s1['id']}.xlsx" in sent_docs
+    assert f"report_card_{s1['id']}.pdf" in sent_docs
+
+
+

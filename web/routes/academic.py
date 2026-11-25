@@ -103,8 +103,35 @@ def export_timetable(class_id: int, fmt: str):
     if fmt == "png":
         data = svc.timetable.export_class_timetable_png(g.user, class_id, week_type=wt)
         return send_file(io.BytesIO(data), mimetype="image/png", as_attachment=True, download_name=f"timetable_{class_id}.png")
+    if fmt == "xlsx":
+        data = svc.timetable.export_class_timetable_xlsx(g.user, class_id, week_type=wt)
+        return send_file(
+            io.BytesIO(data),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"timetable_{class_id}.xlsx",
+        )
     data = svc.timetable.export_class_timetable_pdf(g.user, class_id, week_type=wt)
     return send_file(io.BytesIO(data), mimetype="application/pdf", as_attachment=True, download_name=f"timetable_{class_id}.pdf")
+
+
+@academic_bp.route("/grades/report-card/<int:student_id>/<fmt>")
+@login_required
+def export_report_card(student_id: int, fmt: str):
+    svc = get_services()
+    fmt_clean = "xlsx" if fmt.lower() == "xlsx" else "pdf"
+    data = svc.grades.export_student_report_card(g.user, student_id, fmt=fmt_clean)
+    mime = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if fmt_clean == "xlsx"
+        else "application/pdf"
+    )
+    return send_file(
+        io.BytesIO(data),
+        mimetype=mime,
+        as_attachment=True,
+        download_name=f"report_card_{student_id}.{fmt_clean}",
+    )
 
 
 @academic_bp.route("/attendance", methods=["GET", "POST"])

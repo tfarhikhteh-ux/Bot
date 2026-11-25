@@ -61,7 +61,17 @@ def timetable_view_options_inline(class_id: int) -> InlineKeyboard:
             InlineKeyboardButton("📋 کل برنامه", callback_data=f"tt:cls:{class_id}:ALL"),
         ],
         [
-            InlineKeyboardButton("🖼 تصویر برنامه (PNG)", callback_data=f"tt:png:{class_id}"),
-            InlineKeyboardButton("📄 فایل برنامه (PDF)", callback_data=f"tt:pdf:{class_id}"),
+            InlineKeyboardButton("🖼 تصویر (PNG)", callback_data=f"tt:png:{class_id}"),
+            InlineKeyboardButton("📄 فایل (PDF)", callback_data=f"tt:pdf:{class_id}"),
+            InlineKeyboardButton("📗 اکسل (XLSX)", callback_data=f"tt:xlsx:{class_id}"),
         ],
+    )
+
+
+def report_card_export_inline(student_id: int) -> InlineKeyboard:
+    return InlineKeyboard(
+        [
+            InlineKeyboardButton("📄 دانلود کارنامه (PDF)", callback_data=f"grd:rc_pdf:{student_id}"),
+            InlineKeyboardButton("📗 دانلود کارنامه اکسل (XLSX)", callback_data=f"grd:rc_xlsx:{student_id}"),
+        ]
     )
