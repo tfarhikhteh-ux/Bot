@@ -130,6 +130,7 @@ def register_all_handlers(client: Client, ctx: BotContext) -> None:
         registration,
         reports,
         roles,
+        staff_actions,
         start,
         subjects,
         timetable,
@@ -139,10 +140,11 @@ def register_all_handlers(client: Client, ctx: BotContext) -> None:
     # ۰. نگهبان لحظه‌ای قفل‌های رسانه و پیام در گروه‌های بله (بالاترین اولویت)
     moderation.register_enforcer(client, ctx)
 
-    # ۱. ناوبری سراسری، لغو عملیات، مدیریت قفل گروه و دستور شروع و راهنما
+    # ۱. ناوبری سراسری، لغو عملیات، مدیریت قفل گروه، دستورات هدفمند کارکنان (ریپلای/فوروارد) و راهنما
     start.register(client, ctx)
     help_handler.register(client, ctx)
     moderation.register(client, ctx)
+    staff_actions.register(client, ctx)
     admin.register(client, ctx)
 
     # ۲. ماژول‌های عملیاتی و دکمه‌ها

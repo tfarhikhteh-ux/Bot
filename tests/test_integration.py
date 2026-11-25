@@ -640,7 +640,7 @@ def test_group_reply_modifier_and_24_7_online_report_card_portal(app_env, actors
     assert "⛔" in group_texts
 
     teacher_pv_texts = "\n".join(m["text"] for m in bot_messages if m["chat_id"] == t1["bale_user_id"])
-    assert f"پیام دانش‌آموز «{s1['full_name']}» دریافت شد" in teacher_pv_texts
+    assert f"فرد هدف شناسایی شد: «{s1['full_name']}»" in teacher_pv_texts
     assert "مثبت درسی (+۱ نمره مستمر) ثبت شد" in teacher_pv_texts
     assert "منفی درسی (-۱ نمره مستمر) ثبت شد" in teacher_pv_texts
     assert svc.grades.grades.get_by_id(final_row["id"])["score"] == 19.0

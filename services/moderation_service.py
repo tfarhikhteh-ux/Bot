@@ -3,14 +3,16 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from database.db import DatabaseManager
+from database.repositories.classes import ClassRepository
 from database.repositories.moderation import GroupLockRepository
+from database.repositories.settings import SettingsRepository
 from utils.validators import ValidationError
 
 from .audit_service import AuditService
 from .permission_service import AccessDeniedError, PermissionService
 
-# تمام کارکنان و اعضای مجاز مدیریت گروه (ادمین، مدیر، ناظم/معاون، معلم، انجمن اولیا)
-GROUP_LOCK_EXEMPT_ROLES = {"ADMIN", "SCHOOL_MANAGER", "DEPUTY", "TEACHER", "ASSOCIATION_MEMBER"}
+# نقش‌هایی که در تمام گروه‌های مدرسه دسترسی قفل/باز کردن دارند و از قفل‌ها معاف‌اند
+GLOBAL_GROUP_LOCK_ROLES = {"ADMIN", "SCHOOL_MANAGER", "DEPUTY", "ASSOCIATION_MEMBER"}
 
 LOCK_ITEMS: List[Tuple[str, str, str]] = [
     ("all", "lock_all", "چت گروه (همه پیام‌ها)"),
@@ -82,13 +84,87 @@ PERSIAN_LOCK_ALIASES: Dict[str, str] = {
 
 
 class ModerationService:
-    """سرویس مدیریت قفل‌های گروه بله (گیف، رسانه، لینک، فوروارد، چت و...) و اعمال خودکار آن‌ها."""
+    """سرویس مدیریت قفل‌های گروه بله: ادمین/مدیر/ناظم/انجمن در همه گروه‌ها و معلم فقط در گروه کلاس خودش."""
 
     def __init__(self, db: DatabaseManager, permissions: PermissionService) -> None:
         self.db = db
         self.permissions = permissions
         self.audit = AuditService(db)
         self.repo = GroupLockRepository(db)
+        self.classes = ClassRepository(db)
+        self.settings = SettingsRepository(db)
+
+    def resolve_group_class_id(self, chat_id: int, chat_title: Optional[str] = None) -> Optional[int]:
+        row = self.repo.get_locks(int(chat_id))
+        if row.get("class_id"):
+            return int(row["class_id"])
+        title = (chat_title or row.get("chat_title") or "").strip()
+        if title:
+            year = self.settings.get("academic_year", "1405-1406")
+            cls = self.classes.get_by_name_and_year(title, year)
+            if cls and cls.get("is_active"):
+                return int(cls["id"])
+        return None
+
+    def ensure_can_manage_group(
+        self,
+        actor: Optional[Dict[str, Any]],
+        chat_id: int,
+        chat_title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        checked = self.permissions.require_permission(actor, "MANAGE_GROUP_LOCKS")
+        role = checked["role"].upper()
+        if role in GLOBAL_GROUP_LOCK_ROLES:
+            return checked
+
+        if role == "TEACHER":
+            cls_id = self.resolve_group_class_id(chat_id, chat_title)
+            if not cls_id:
+                self.audit.log(
+                    action="TEACHER_GROUP_LOCK_UNBOUND_DENIED",
+                    entity_type="GROUP_LOCK",
+                    actor=checked,
+                    entity_id=chat_id,
+                    result="DENIED",
+                    description="تلاش معلم برای تغییر قفل در گروهی که به کلاس او متصل نیست",
+                )
+                raise AccessDeniedError(
+                    "شما فقط در گروه کلاس‌های تخصیص‌یافته به خودتان اجازه مدیریت قفل‌ها را دارید. "
+                    "(مدیر یا ناظم می‌تواند با دستور «اتصال کلاس <نام کلاس>» این گروه را به کلاس متصل کند.)"
+                )
+            self.permissions.ensure_teacher_class_subject(checked, cls_id)
+            return checked
+
+        raise AccessDeniedError("شما مجوز مدیریت قفل‌های گروه را ندارید.")
+
+    def bind_group_to_class(
+        self,
+        actor: Optional[Dict[str, Any]],
+        chat_id: int,
+        class_id: int,
+        chat_title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        checked = self.permissions.require_active_user(actor)
+        if checked["role"].upper() not in {"ADMIN", "SCHOOL_MANAGER", "DEPUTY"}:
+            raise AccessDeniedError("اتصال گروه به کلاس فقط توسط ادمین، مدیر مدرسه یا ناظم مجاز است.")
+        cls = self.classes.get_by_id(int(class_id))
+        if not cls or not cls.get("is_active"):
+            raise ValidationError("کلاس فعال موردنظر یافت نشد.")
+        state = self.repo.upsert_locks(
+            chat_id=int(chat_id),
+            chat_title=chat_title,
+            class_id=int(cls["id"]),
+            updated_by=checked["id"],
+        )
+        self.audit.log(
+            action="BIND_GROUP_CLASS",
+            entity_type="GROUP_LOCK",
+            actor=checked,
+            entity_id=chat_id,
+            after_data={"class_id": cls["id"], "class_name": cls["name"]},
+            description=f"اتصال گروه {chat_title or chat_id} به کلاس {cls['name']}",
+        )
+        return {"locks": state, "class": cls}
 
     def resolve_target_key(self, raw_target: str) -> str:
         cleaned = (raw_target or "").strip().lower().replace("_", " ").replace("\u200c", " ")
@@ -110,7 +186,7 @@ class ModerationService:
         locked: bool,
         chat_title: Optional[str] = None,
     ) -> Dict[str, Any]:
-        checked = self.permissions.require_permission(actor, "MANAGE_GROUP_LOCKS")
+        checked = self.ensure_can_manage_group(actor, chat_id, chat_title)
         key = target if (target in LOCK_KEY_TO_COLUMN or target == "media") else self.resolve_target_key(target)
         val = 1 if locked else 0
 
@@ -151,18 +227,46 @@ class ModerationService:
         new_locked = not bool(current.get(col, 0))
         return self.set_lock(actor, chat_id, key, locked=new_locked, chat_title=chat_title)
 
-    def get_group_locks_for_panel(self, actor: Optional[Dict[str, Any]], chat_id: int) -> Dict[str, Any]:
-        self.permissions.require_permission(actor, "MANAGE_GROUP_LOCKS")
+    def get_group_locks_for_panel(
+        self,
+        actor: Optional[Dict[str, Any]],
+        chat_id: int,
+        chat_title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self.ensure_can_manage_group(actor, chat_id, chat_title)
         return self.repo.get_locks(int(chat_id))
+
+    def _is_sender_exempt(
+        self,
+        chat_id: int,
+        sender_actor: Optional[Dict[str, Any]],
+        chat_title: Optional[str] = None,
+    ) -> bool:
+        if not sender_actor or not sender_actor.get("is_active"):
+            return False
+        role = sender_actor["role"].upper()
+        if role in GLOBAL_GROUP_LOCK_ROLES:
+            return True
+        if role == "TEACHER":
+            cls_id = self.resolve_group_class_id(chat_id, chat_title)
+            if not cls_id:
+                return False
+            try:
+                self.permissions.ensure_teacher_class_subject(sender_actor, cls_id)
+                return True
+            except AccessDeniedError:
+                return False
+        return False
 
     def check_violation(
         self,
         chat_id: int,
         sender_actor: Optional[Dict[str, Any]],
         flags: Dict[str, bool],
+        chat_title: Optional[str] = None,
     ) -> Optional[str]:
-        """بررسی تخلف پیام از قفل‌های فعال گروه؛ کارکنان و انجمن معاف هستند."""
-        if sender_actor and sender_actor.get("is_active") and sender_actor.get("role") in GROUP_LOCK_EXEMPT_ROLES:
+        """بررسی تخلف پیام از قفل‌های فعال گروه؛ ادمین/مدیر/ناظم/انجمن سراسری و معلم در گروه کلاس خودش معاف است."""
+        if self._is_sender_exempt(chat_id, sender_actor, chat_title):
             return None
 
         locks = self.repo.get_locks(int(chat_id))

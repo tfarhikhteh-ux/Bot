@@ -424,6 +424,7 @@ CREATE INDEX IF NOT EXISTS idx_continuous_mod_student
 CREATE TABLE IF NOT EXISTS group_locks (
     chat_id INTEGER PRIMARY KEY,
     chat_title TEXT,
+    class_id INTEGER REFERENCES classes(id) ON DELETE SET NULL,
     lock_all INTEGER NOT NULL DEFAULT 0 CHECK (lock_all IN (0, 1)),
     lock_gif INTEGER NOT NULL DEFAULT 0 CHECK (lock_gif IN (0, 1)),
     lock_sticker INTEGER NOT NULL DEFAULT 0 CHECK (lock_sticker IN (0, 1)),

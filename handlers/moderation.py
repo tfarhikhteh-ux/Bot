@@ -8,7 +8,7 @@ from balethon import Client
 from balethon.conditions import Condition
 from balethon.objects import CallbackQuery, InlineKeyboard, InlineKeyboardButton, Message
 
-from services.moderation_service import LOCK_ITEMS, LOCK_KEY_TO_LABEL
+from services.moderation_service import LOCK_ITEMS
 from utils.helpers import safe_answer_callback
 from utils.logging_config import redact_sensitive_text
 from utils.validators import ValidationError
@@ -18,6 +18,7 @@ from . import BotContext, cb_prefix
 log = logging.getLogger("school_bot.moderation")
 
 _LINK_RE = re.compile(r"(?:https?://|www\.|ble\.ir/|t\.me/)\S+", re.IGNORECASE)
+_BIND_CLASS_RE = re.compile(r"^(?:/?اتصال[_\s]+کلاس|/bind_class)[_\s]+(.+)$", re.IGNORECASE)
 
 # الگوهای باز کردن قفل باید قبل از الگوی قفل کردن بررسی شوند تا «قفل باز گیف» به درستی «باز کردن» تشخیص داده شود
 _UNLOCK_CMD_RE = re.compile(
@@ -81,12 +82,16 @@ def extract_message_media_flags(msg: Message) -> Dict[str, bool]:
 
 
 def parse_lock_command(text: Optional[str]) -> Optional[Tuple[str, Optional[str]]]:
-    """برگشت (action, target): action یکی از 'lock'، 'unlock' یا 'panel' است."""
+    """برگشت (action, target): action یکی از 'lock'، 'unlock'، 'panel' یا 'bind_class' است."""
     if not text:
         return None
     cleaned = " ".join(text.strip().split())
     if cleaned.lower() in _PANEL_WORDS:
         return ("panel", None)
+
+    m_bind = _BIND_CLASS_RE.match(cleaned)
+    if m_bind:
+        return ("bind_class", m_bind.group(1).strip())
 
     m_un = _UNLOCK_CMD_RE.match(cleaned)
     if m_un:
@@ -102,7 +107,7 @@ def parse_lock_command(text: Optional[str]) -> Optional[Tuple[str, Optional[str]
     return None
 
 
-def _build_locks_inline_panel(chat_id: int, locks: dict) -> InlineKeyboard:
+def _build_locks_inline_panel(chat_id: int, locks: dict, can_bind_class: bool = False) -> InlineKeyboard:
     short_titles = {
         "all": "چت گروه",
         "gif": "گیف",
@@ -141,15 +146,27 @@ def _build_locks_inline_panel(chat_id: int, locks: dict) -> InlineKeyboard:
         InlineKeyboardButton("🔒 قفل همه رسانه‌ها", callback_data=f"glk:med:{chat_id}:1", style="danger"),
         InlineKeyboardButton("🔓 باز کردن همه رسانه‌ها", callback_data=f"glk:med:{chat_id}:0", style="success"),
     )
+    if can_bind_class:
+        kb.add_row(
+            InlineKeyboardButton("🏫 اتصال این گروه به کلاس", callback_data=f"glk:clsmenu:{chat_id}", style="primary")
+        )
     return kb
 
 
-def _format_locks_panel_text(chat_title: Optional[str], locks: dict) -> str:
-    lines = [f"🛡 پنل مدیریت قفل‌ها و رسانه‌های گروه «{chat_title or 'گروه'}»:", ""]
-    for key, col, label in LOCK_ITEMS:
+def _format_locks_panel_text(ctx: BotContext, chat_id: int, chat_title: Optional[str], locks: dict) -> str:
+    cls_id = ctx.services.moderation.resolve_group_class_id(chat_id, chat_title)
+    cls_obj = ctx.services.timetable.classes.get_by_id(cls_id) if cls_id else None
+    cls_txt = cls_obj["name"] if cls_obj else "متصل‌نشده (گروه عمومی)"
+
+    lines = [
+        f"🛡 پنل مدیریت قفل‌ها و رسانه‌های گروه «{chat_title or 'گروه'}»",
+        f"🏫 کلاس متصل: {cls_txt}",
+        "",
+    ]
+    for _key, col, label in LOCK_ITEMS:
         status = "🔒 قفل (مسدود برای دانش‌آموزان)" if locks.get(col) else "🔓 باز (آزاد)"
         lines.append(f"• {label}: {status}")
-    lines.append("\n💡 با کلیک روی هر دکمه وضعیت آن تغییر می‌کند (ادمین، مدیر، ناظم، دبیر و انجمن از قفل‌ها معاف‌اند).")
+    lines.append("\n💡 ادمین، مدیر، ناظم و انجمن در همه گروه‌ها و دبیر فقط در گروه کلاس خودش مجاز است.")
     return "\n".join(lines)
 
 
@@ -165,7 +182,10 @@ def register_enforcer(client: Client, ctx: BotContext) -> None:
                 return False
             actor = ctx.get_actor(int(event.author.id))
             flags = extract_message_media_flags(event)
-            violation = ctx.services.moderation.check_violation(int(event.chat.id), actor, flags)
+            chat_title = getattr(event.chat, "title", None)
+            violation = ctx.services.moderation.check_violation(
+                int(event.chat.id), actor, flags, chat_title=chat_title
+            )
             return violation is not None
 
     cond = _ViolationCondition()
@@ -230,16 +250,19 @@ def register(client: Client, ctx: BotContext) -> None:
             action, target = parsed
             if action == "panel":
                 await _handle_group_panel(client, message, ctx)
+            elif action == "bind_class":
+                await _handle_bind_class_text(client, message, ctx, class_name=target or "")
             else:
                 await _handle_lock_toggle_text(client, message, ctx, locked=(action == "lock"), target=target or "")
             return
 
         async def _run_admin_action(actor):
-            checked = ctx.services.permissions.require_permission(actor, "MANAGE_GROUP_LOCKS")
+            chat_id = int(message.chat.id)
+            chat_title = getattr(message.chat, "title", None)
+            checked = ctx.services.moderation.ensure_can_manage_group(actor, chat_id, chat_title)
             if not message.reply_to_message or message.reply_to_message.id is None:
                 raise ValidationError(f"برای اجرای دستور «{txt}» باید روی پیام موردنظر در گروه ریپلای کنید.")
 
-            chat_id = int(message.chat.id)
             target_msg_id = int(message.reply_to_message.id)
 
             if txt in {"پین", "سنجاق"}:
@@ -280,6 +303,41 @@ def register(client: Client, ctx: BotContext) -> None:
             sub = parts[1]
             chat_id = int(parts[2])
             chat_title = getattr(callback_query.message.chat, "title", None) if callback_query.message else None
+            can_bind = bool(actor and actor.get("role") in {"ADMIN", "SCHOOL_MANAGER", "DEPUTY"})
+
+            if sub == "clsmenu":
+                if not can_bind:
+                    raise ValidationError("فقط ادمین، مدیر یا ناظم مجاز به اتصال گروه به کلاس است.")
+                classes = ctx.services.timetable.classes.list_classes(active_only=True)
+                kb = InlineKeyboard()
+                for c in classes[:12]:
+                    kb.add_row(InlineKeyboardButton(f"🏫 {c['name']}", callback_data=f"glk:bind:{chat_id}:{c['id']}"))
+                kb.add_row(InlineKeyboardButton("🔙 بازگشت به پنل قفل", callback_data=f"glk:back:{chat_id}"))
+                await safe_answer_callback(callback_query, "کلاس را انتخاب کنید.")
+                if callback_query.message:
+                    await callback_query.message.edit_text("🏫 کلاس مربوط به این گروه را انتخاب کنید:", reply_markup=kb)
+                return
+
+            if sub == "bind":
+                cls_id = int(parts[3])
+                res_bind = ctx.services.moderation.bind_group_to_class(actor, chat_id, cls_id, chat_title=chat_title)
+                await safe_answer_callback(callback_query, f"به کلاس {res_bind['class']['name']} متصل شد.")
+                if callback_query.message:
+                    await callback_query.message.edit_text(
+                        _format_locks_panel_text(ctx, chat_id, chat_title, res_bind["locks"]),
+                        reply_markup=_build_locks_inline_panel(chat_id, res_bind["locks"], can_bind_class=can_bind),
+                    )
+                return
+
+            if sub == "back":
+                locks = ctx.services.moderation.get_group_locks_for_panel(actor, chat_id, chat_title=chat_title)
+                await safe_answer_callback(callback_query, "پنل قفل")
+                if callback_query.message:
+                    await callback_query.message.edit_text(
+                        _format_locks_panel_text(ctx, chat_id, chat_title, locks),
+                        reply_markup=_build_locks_inline_panel(chat_id, locks, can_bind_class=can_bind),
+                    )
+                return
 
             if sub == "tog":
                 key = parts[3]
@@ -294,21 +352,39 @@ def register(client: Client, ctx: BotContext) -> None:
             await safe_answer_callback(callback_query, f"{res['label']}: {state_str}")
             if callback_query.message:
                 await callback_query.message.edit_text(
-                    _format_locks_panel_text(chat_title, res["locks"]),
-                    reply_markup=_build_locks_inline_panel(chat_id, res["locks"]),
+                    _format_locks_panel_text(ctx, chat_id, chat_title, res["locks"]),
+                    reply_markup=_build_locks_inline_panel(chat_id, res["locks"], can_bind_class=can_bind),
                 )
 
         await ctx.run_safe_callback(client, callback_query, _run)
+
+
+async def _handle_bind_class_text(client: Client, message: Message, ctx: BotContext, *, class_name: str) -> None:
+    async def _run(actor):
+        chat_id = int(message.chat.id)
+        chat_title = getattr(message.chat, "title", None)
+        year = ctx.services.notifications.settings.get("academic_year", "1405-1406")
+        cls = ctx.services.timetable.classes.get_by_name_and_year(class_name.strip(), year)
+        if not cls or not cls.get("is_active"):
+            raise ValidationError(f"کلاس فعال با نام «{class_name}» در سال تحصیلی {year} یافت نشد.")
+        res = ctx.services.moderation.bind_group_to_class(actor, chat_id, cls["id"], chat_title=chat_title)
+        await message.reply(
+            f"✅ این گروه به کلاس «{res['class']['name']}» متصل شد.\n"
+            f"اکنون دبیرانِ کلاس «{res['class']['name']}» نیز می‌توانند در این گروه قفل گیف و رسانه را مدیریت کنند."
+        )
+
+    await ctx.run_safe_message(client, message, _run)
 
 
 async def _handle_group_panel(client: Client, message: Message, ctx: BotContext) -> None:
     async def _run(actor):
         chat_id = int(message.chat.id)
         chat_title = getattr(message.chat, "title", None)
-        locks = ctx.services.moderation.get_group_locks_for_panel(actor, chat_id)
+        locks = ctx.services.moderation.get_group_locks_for_panel(actor, chat_id, chat_title=chat_title)
+        can_bind = bool(actor and actor.get("role") in {"ADMIN", "SCHOOL_MANAGER", "DEPUTY"})
         await message.reply(
-            _format_locks_panel_text(chat_title, locks),
-            reply_markup=_build_locks_inline_panel(chat_id, locks),
+            _format_locks_panel_text(ctx, chat_id, chat_title, locks),
+            reply_markup=_build_locks_inline_panel(chat_id, locks, can_bind_class=can_bind),
         )
 
     await ctx.run_safe_message(client, message, _run)

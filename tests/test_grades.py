@@ -93,11 +93,17 @@ def test_positive_and_negative_continuous_modifiers_never_touch_final_exam(app_e
     assert r_neg["positive_count"] == 1 and r_neg["negative_count"] == 1
     assert svc.grades.grades.get_by_id(final_row["id"])["score"] == 18.5
 
-    # ۳. دانش‌آموز یا دبیر غیرمرتبط با کلاس اجازه ثبت مثبت/منفی درسی ندارد
+    # ۳. فقط و فقط معلمِ درس مجاز است؛ دانش‌آموز، دبیر دیگر و حتی مدیر یا ادمین مجاز به مثبت/منفی درسی نیستند
     with pytest.raises(AccessDeniedError):
         svc.grades.apply_continuous_modifier(s1, s1["id"], delta=1.0)
     with pytest.raises(AccessDeniedError):
         svc.grades.apply_continuous_modifier(t2, s1["id"], delta=1.0)
+    with pytest.raises(AccessDeniedError):
+        svc.grades.apply_continuous_modifier(mgr, s1["id"], delta=1.0)
+    with pytest.raises(AccessDeniedError):
+        svc.grades.apply_continuous_modifier(actors["admin"], s1["id"], delta=1.0)
+    with pytest.raises(AccessDeniedError):
+        svc.grades.apply_continuous_modifier(actors["deputy"], s1["id"], delta=1.0)
 
     # ۴. اگر دبیر دو درس در همان کلاس داشته باشد بدون نام بردن درس، خطای ابهام درس می‌دهد تا دکمه نمایش داده شود
     chem = svc.timetable.create_subject(mgr, "شیمی ۱", "10", "تخصصی", default_coefficient=3.0)
