@@ -562,11 +562,64 @@ def test_group_reply_modifier_and_24_7_online_report_card_portal(app_env, actors
                     },
                 },
             )
-            # ۴. درخواست لینک کارنامه آنلاین وب توسط دانش‌آموز در ربات
+            # ۴. فوروارد پیام دانش‌آموز به شخصی (پی‌وی) ربات و سپس ارسال دستور «مثبت درسی»
             await client.dispatcher.dispatch_raw_update(
                 client,
                 {
                     "update_id": 204,
+                    "message": {
+                        "message_id": 5004,
+                        "from": {"id": t1["bale_user_id"], "first_name": "دبیر"},
+                        "chat": {"id": t1["bale_user_id"], "type": "private"},
+                        "forward_from": {"id": s1["bale_user_id"], "first_name": "دانش‌آموز"},
+                        "forward_date": 1764050000,
+                        "text": "تکلیف جلسه سوم شیمی",
+                    },
+                },
+            )
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 205,
+                    "message": {
+                        "message_id": 5005,
+                        "from": {"id": t1["bale_user_id"], "first_name": "دبیر"},
+                        "chat": {"id": t1["bale_user_id"], "type": "private"},
+                        "text": "مثبت درسی",
+                    },
+                },
+            )
+            # ۵. فوروارد پیام غیرمتنی (مثلاً عکس تمرین) به پی‌وی ربات و ارسال «منفی درسی»
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 206,
+                    "message": {
+                        "message_id": 5006,
+                        "from": {"id": t1["bale_user_id"], "first_name": "دبیر"},
+                        "chat": {"id": t1["bale_user_id"], "type": "private"},
+                        "forward_from": {"id": s1["bale_user_id"], "first_name": "دانش‌آموز"},
+                        "forward_date": 1764050010,
+                    },
+                },
+            )
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 207,
+                    "message": {
+                        "message_id": 5007,
+                        "from": {"id": t1["bale_user_id"], "first_name": "دبیر"},
+                        "chat": {"id": t1["bale_user_id"], "type": "private"},
+                        "text": "منفی",
+                    },
+                },
+            )
+            # ۶. درخواست لینک کارنامه آنلاین وب توسط دانش‌آموز در ربات
+            await client.dispatcher.dispatch_raw_update(
+                client,
+                {
+                    "update_id": 208,
                     "callback_query": {
                         "id": "cb_online_rc",
                         "from": {"id": s1["bale_user_id"], "first_name": "دانش‌آموز"},
@@ -585,6 +638,11 @@ def test_group_reply_modifier_and_24_7_online_report_card_portal(app_env, actors
     assert "مثبت درسی (+۱ نمره مستمر) ثبت شد" in group_texts
     assert "منفی درسی (-۱ نمره مستمر) ثبت شد" in group_texts
     assert "⛔" in group_texts
+
+    teacher_pv_texts = "\n".join(m["text"] for m in bot_messages if m["chat_id"] == t1["bale_user_id"])
+    assert f"پیام دانش‌آموز «{s1['full_name']}» دریافت شد" in teacher_pv_texts
+    assert "مثبت درسی (+۱ نمره مستمر) ثبت شد" in teacher_pv_texts
+    assert "منفی درسی (-۱ نمره مستمر) ثبت شد" in teacher_pv_texts
     assert svc.grades.grades.get_by_id(final_row["id"])["score"] == 19.0
 
     priv_texts = "\n".join(m["text"] for m in bot_messages if m["chat_id"] == s1["bale_user_id"])

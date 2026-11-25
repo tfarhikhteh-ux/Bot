@@ -29,19 +29,79 @@ from . import BotContext, cb_prefix
 
 FLOW_GRADES = "GRADES_FLOW"
 
-_POS_MOD_RE = re.compile(r"^(?:/?مثبت(?:[_\s]+درسی)?|\+[1۱]\s*درسی)(?:\s*(?:\||\s)\s*(.+))?$")
-_NEG_MOD_RE = re.compile(r"^(?:/?منفی(?:[_\s]+درسی)?|-[1۱]\s*درسی)(?:\s*(?:\||\s)\s*(.+))?$")
+_POS_MOD_RE = re.compile(r"^(?:/?مثبت(?:[_\s]+درسی)?|\+[1۱](?:\s*درسی)?)(?:\s*(?:\||\s)\s*(.+))?$")
+_NEG_MOD_RE = re.compile(r"^(?:/?منفی(?:[_\s]+درسی)?|-[1۱](?:\s*درسی)?)(?:\s*(?:\||\s)\s*(.+))?$")
 
 
-def _parse_continuous_modifier_text(text: Optional[str]) -> Optional[Tuple[float, Optional[str], Optional[str]]]:
+def _is_private_chat(msg: Optional[Message]) -> bool:
+    if not msg or not msg.chat or msg.chat.type is None:
+        return False
+    val = getattr(msg.chat.type, "value", msg.chat.type)
+    return str(val).lower().endswith("private")
+
+
+def _is_forwarded_message(msg: Optional[Message]) -> bool:
+    if not msg:
+        return False
+    return bool(
+        getattr(msg, "forward_from", None)
+        or getattr(msg, "forward_date", None)
+        or getattr(msg, "forward_sender_name", None)
+        or getattr(msg, "forward_origin", None)
+    )
+
+
+def _resolve_student_from_forwarded(ctx: BotContext, msg: Message) -> dict:
+    """استخراج دانش‌آموز هدف از پیام فورواردشده در پی‌وی یا گروه."""
+    fwd_user = getattr(msg, "forward_from", None)
+    fwd_uid: Optional[int] = int(fwd_user.id) if (fwd_user and getattr(fwd_user, "id", None) is not None) else None
+
+    if fwd_uid is None:
+        origin = getattr(msg, "forward_origin", None)
+        if isinstance(origin, dict):
+            sender_user = origin.get("sender_user") or {}
+            if sender_user.get("id") is not None:
+                fwd_uid = int(sender_user["id"])
+        elif origin is not None and getattr(origin, "sender_user", None) is not None:
+            su = getattr(origin, "sender_user")
+            if getattr(su, "id", None) is not None:
+                fwd_uid = int(su.id)
+
+    if fwd_uid is not None:
+        student = ctx.users_repo.get_by_bale_id(fwd_uid)
+        if not student or student["role"] != "STUDENT" or not student["is_active"]:
+            raise ValidationError("فرستنده اصلی این پیام فورواردشده به عنوان دانش‌آموز فعال در سامانه ثبت نشده است.")
+        return student
+
+    sender_name = (getattr(msg, "forward_sender_name", None) or "").strip()
+    if sender_name:
+        matches = [
+            u
+            for u in ctx.users_repo.search_users(query=sender_name, role="STUDENT", active_only=True)
+            if u["full_name"].strip() == sender_name
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValidationError(
+                f"حریم خصوصی فوروارد دانش‌آموز بسته است و بیش از یک دانش‌آموز با نام «{sender_name}» وجود دارد؛ لطفاً در گروه روی پیام او ریپلای کنید."
+            )
+
+    raise ValidationError(
+        "شناسه دانش‌آموز در پیام فورواردشده توسط تنظیمات حریم خصوصی بله مخفی شده یا در سامانه ثبت‌نام نکرده است."
+    )
+
+
+def _parse_continuous_modifier_text(
+    text: Optional[str], allow_short: bool = False
+) -> Optional[Tuple[float, Optional[str], Optional[str]]]:
     """تشخیص دستور «مثبت درسی» (+1) یا «منفی درسی» (-1) همراه با نام درس یا توضیح اختیاری."""
     if not text:
         return None
     cleaned = text.strip()
-    # حالت صریح «مثبت درسی» و «منفی درسی» (و معادل اسلش‌دار /مثبت_درسی و /منفی_درسی)
     for pattern, delta in ((_POS_MOD_RE, 1.0), (_NEG_MOD_RE, -1.0)):
-        # برای جلوگیری از تداخل با کلمات عادی تک‌کلمه‌ای، فرم بدون اسلش حتماً شامل «درسی» است
-        if not cleaned.startswith("/") and "درسی" not in cleaned:
+        # در چت عمومی فرم بدون اسلش حتماً شامل «درسی» است؛ اما بلافاصله پس از فوروارد پیام در پی‌وی، فرم کوتاه هم مجاز است
+        if not allow_short and not cleaned.startswith("/") and "درسی" not in cleaned:
             continue
         m = pattern.match(cleaned)
         if m:
@@ -55,13 +115,26 @@ def _parse_continuous_modifier_text(text: Optional[str]) -> Optional[Tuple[float
     return None
 
 
+def _private_forwarded_student_condition() -> Condition:
+    class _FwdCond(Condition):
+        def __init__(self) -> None:
+            super().__init__(can_process=Message)
+
+        async def __call__(self, client, event: Message) -> bool:
+            return _is_private_chat(event) and _is_forwarded_message(event)
+
+    return _FwdCond()
+
+
 def _continuous_modifier_condition() -> Condition:
     class _ModCond(Condition):
         def __init__(self) -> None:
             super().__init__(can_process=Message)
 
         async def __call__(self, client, event: Message) -> bool:
-            return _parse_continuous_modifier_text(event.text) is not None
+            if _is_forwarded_message(event):
+                return False
+            return _parse_continuous_modifier_text(event.text, allow_short=False) is not None
 
     return _ModCond()
 
@@ -84,36 +157,174 @@ def _format_modifier_result(res: dict) -> str:
     )
 
 
+async def _apply_modifier_and_respond(
+    *,
+    ctx: BotContext,
+    client: Client,
+    actor: dict,
+    student: dict,
+    delta: float,
+    subject_hint: Optional[str],
+    note: Optional[str],
+    source_chat_id: Optional[int],
+    source_message_id: Optional[int],
+    reply_message: Message,
+) -> None:
+    try:
+        res = ctx.services.grades.apply_continuous_modifier(
+            actor=actor,
+            student_user_id=student["id"],
+            delta=delta,
+            subject_hint=subject_hint,
+            note=note,
+            source_chat_id=source_chat_id,
+            source_message_id=source_message_id,
+        )
+        await reply_message.reply(_format_modifier_result(res))
+        await ctx.flush_notifications(client)
+    except AmbiguousTeacherSubjectError as amb:
+        sign_code = "pos" if amb.delta > 0 else "neg"
+        kb = InlineKeyboard()
+        for cs in amb.subjects:
+            btn_label = f"{'➕ مثبت' if amb.delta > 0 else '➖ منفی'} درسی: {cs['subject_name']}"
+            kb.add_row(
+                InlineKeyboardButton(
+                    btn_label,
+                    callback_data=f"cmod:{actor['bale_user_id']}:{amb.student['id']}:{cs['subject_id']}:{sign_code}:{source_message_id or 0}",
+                )
+            )
+        await reply_message.reply(
+            f"👨‍🏫 شما در کلاس «{amb.cls['name']}» بیش از یک درس تدریس می‌کنید؛ درس موردنظر برای اعمال روی نمره مستمر «{amb.student['full_name']}» را انتخاب کنید:",
+            reply_markup=kb,
+        )
+
+
 def register(client: Client, ctx: BotContext) -> None:
-    @client.on_message(_continuous_modifier_condition())
-    async def continuous_modifier_reply_handler(*, client: Client, message: Message):
+    @client.on_message(_private_forwarded_student_condition())
+    async def private_forwarded_student_handler(*, client: Client, message: Message):
         async def _run(actor):
-            parsed = _parse_continuous_modifier_text(message.text)
-            if not parsed:
-                return
-            delta, subject_hint, note = parsed
-            if not message.reply_to_message or not message.reply_to_message.author:
+            checked = ctx.services.permissions.require_active_user(actor)
+            uid = int(message.author.id)
+            if checked["role"] not in {"TEACHER", "SCHOOL_MANAGER", "ADMIN"}:
+                raise ValidationError("فوروارد پیام دانش‌آموز برای ثبت مثبت/منفی درسی فقط ویژه دبیران و مدیریت است.")
+
+            # اگر کادر آموزشی در وسط یک فرم دیگر (مثلاً ثبت تکلیف) است، در آن فرم تداخل ایجاد نکنیم
+            sess = ctx.users_repo.get_session(uid)
+            if sess and not (sess.get("flow") == FLOW_GRADES and sess.get("step") == "FORWARDED_MOD_TARGET"):
                 await message.reply(
-                    "⚠️ برای ثبت «مثبت درسی» یا «منفی درسی»، باید روی پیام دانش‌آموز موردنظر ریپلای (Reply) کنید."
+                    "⚠️ شما یک فرم باز در حال تکمیل دارید. ابتدا آن را کامل کنید یا «❌ لغو عملیات» را بزنید و سپس پیام دانش‌آموز را فوروارد کنید."
                 )
                 return
 
-            target_bale_id = int(message.reply_to_message.author.id)
-            student = ctx.users_repo.get_by_bale_id(target_bale_id)
-            if not student or student["role"] != "STUDENT" or not student["is_active"]:
-                raise ValidationError("کاربری که روی پیام او ریپلای کرده‌اید به عنوان دانش‌آموز فعال در سامانه ثبت نشده است.")
+            student = _resolve_student_from_forwarded(ctx, message)
+            ctx.users_repo.set_session(
+                uid,
+                FLOW_GRADES,
+                "FORWARDED_MOD_TARGET",
+                {"student_id": student["id"], "fwd_msg_id": int(message.id) if message.id else 0},
+            )
+            kb = InlineKeyboard(
+                [
+                    InlineKeyboardButton(
+                        "➕ مثبت درسی (+۱ مستمر)",
+                        callback_data=f"cmod_quick:{checked['bale_user_id']}:{student['id']}:pos:{message.id or 0}",
+                    ),
+                    InlineKeyboardButton(
+                        "➖ منفی درسی (-۱ مستمر)",
+                        callback_data=f"cmod_quick:{checked['bale_user_id']}:{student['id']}:neg:{message.id or 0}",
+                    ),
+                ]
+            )
+            await message.reply(
+                f"👤 پیام دانش‌آموز «{student['full_name']}» دریافت شد.\n"
+                f"✍️ اکنون دستور «مثبت درسی» یا «منفی درسی» را ارسال کنید (یا از دکمه‌های سریع زیر بزنید):",
+                reply_markup=kb,
+            )
+
+        await ctx.run_safe_message(client, message, _run)
+
+    @client.on_message(_continuous_modifier_condition())
+    async def continuous_modifier_reply_handler(*, client: Client, message: Message):
+        async def _run(actor):
+            parsed = _parse_continuous_modifier_text(message.text, allow_short=False)
+            if not parsed:
+                return
+            delta, subject_hint, note = parsed
+            uid = int(message.author.id)
+            student: Optional[dict] = None
+
+            if message.reply_to_message:
+                if _is_forwarded_message(message.reply_to_message):
+                    student = _resolve_student_from_forwarded(ctx, message.reply_to_message)
+                elif message.reply_to_message.author:
+                    target_bale_id = int(message.reply_to_message.author.id)
+                    student = ctx.users_repo.get_by_bale_id(target_bale_id)
+                    if not student or student["role"] != "STUDENT" or not student["is_active"]:
+                        raise ValidationError("کاربری که روی پیام او ریپلای کرده‌اید به عنوان دانش‌آموز فعال در سامانه ثبت نشده است.")
+                # اگر در پی‌وی هم سشنی از فوروارد باز بود، پاک شود
+                if _is_private_chat(message):
+                    sess = ctx.users_repo.get_session(uid)
+                    if sess and sess.get("flow") == FLOW_GRADES and sess.get("step") == "FORWARDED_MOD_TARGET":
+                        ctx.users_repo.clear_session(uid)
+            elif _is_private_chat(message):
+                sess = ctx.users_repo.get_session(uid)
+                if sess and sess.get("flow") == FLOW_GRADES and sess.get("step") == "FORWARDED_MOD_TARGET":
+                    stu_id = int(sess["data"]["student_id"])
+                    student = ctx.users_repo.get_by_id(stu_id)
+                    ctx.users_repo.clear_session(uid)
+
+            if not student:
+                await message.reply(
+                    "⚠️ برای ثبت «مثبت درسی» یا «منفی درسی» یکی از دو روش زیر را انجام دهید:\n"
+                    "۱) در گروه روی پیام دانش‌آموز ریپلای (Reply) کنید و دستور را بفرستید.\n"
+                    "۲) پیام دانش‌آموز را به شخصی (پی‌وی) ربات فوروارد کنید و بلافاصله بعدش دستور را بفرستید."
+                )
+                return
+
+            checked = ctx.services.permissions.require_active_user(actor)
+            await _apply_modifier_and_respond(
+                ctx=ctx,
+                client=client,
+                actor=checked,
+                student=student,
+                delta=delta,
+                subject_hint=subject_hint,
+                note=note,
+                source_chat_id=int(message.chat.id) if message.chat else None,
+                source_message_id=int(message.id) if message.id else None,
+                reply_message=message,
+            )
+
+        await ctx.run_safe_message(client, message, _run)
+
+    @client.on_callback_query(cb_prefix("cmod_quick:"))
+    async def continuous_modifier_quick_callback(*, client: Client, callback_query: CallbackQuery):
+        async def _run(actor):
+            parts = callback_query.data.split(":")
+            expected_bale_id = int(parts[1])
+            student_id = int(parts[2])
+            delta = 1.0 if parts[3] == "pos" else -1.0
+            src_msg_id = int(parts[4]) if len(parts) > 4 and int(parts[4]) > 0 else None
+
+            if int(callback_query.author.id) != expected_bale_id:
+                await safe_answer_callback(callback_query, "⛔ این دکمه فقط مخصوص دبیر صادرکننده است.", show_alert=True)
+                return
+
+            ctx.users_repo.clear_session(expected_bale_id)
+            student = ctx.users_repo.get_by_id(student_id)
+            if not student:
+                raise ValidationError("دانش‌آموز یافت نشد.")
 
             try:
                 res = ctx.services.grades.apply_continuous_modifier(
                     actor=actor,
-                    student_user_id=student["id"],
+                    student_user_id=student_id,
                     delta=delta,
-                    subject_hint=subject_hint,
-                    note=note,
-                    source_chat_id=int(message.chat.id) if message.chat else None,
-                    source_message_id=int(message.id) if message.id else None,
+                    source_chat_id=int(callback_query.message.chat.id) if (callback_query.message and src_msg_id) else None,
+                    source_message_id=src_msg_id,
                 )
-                await message.reply(_format_modifier_result(res))
+                await safe_answer_callback(callback_query, "در نمره مستمر ثبت شد.")
+                await callback_query.message.edit_text(_format_modifier_result(res))
                 await ctx.flush_notifications(client)
             except AmbiguousTeacherSubjectError as amb:
                 sign_code = "pos" if amb.delta > 0 else "neg"
@@ -123,15 +334,16 @@ def register(client: Client, ctx: BotContext) -> None:
                     kb.add_row(
                         InlineKeyboardButton(
                             btn_label,
-                            callback_data=f"cmod:{actor['bale_user_id']}:{amb.student['id']}:{cs['subject_id']}:{sign_code}:{message.id or 0}",
+                            callback_data=f"cmod:{actor['bale_user_id']}:{amb.student['id']}:{cs['subject_id']}:{sign_code}:{src_msg_id or 0}",
                         )
                     )
-                await message.reply(
-                    f"👨‍🏫 شما در کلاس «{amb.cls['name']}» بیش از یک درس تدریس می‌کنید؛ درس موردنظر برای اعمال روی نمره مستمر «{amb.student['full_name']}» را انتخاب کنید:",
+                await safe_answer_callback(callback_query, "درس را انتخاب کنید.")
+                await callback_query.message.edit_text(
+                    f"👨‍🏫 درس موردنظر برای اعمال روی نمره مستمر «{amb.student['full_name']}» را انتخاب کنید:",
                     reply_markup=kb,
                 )
 
-        await ctx.run_safe_message(client, message, _run)
+        await ctx.run_safe_callback(client, callback_query, _run, sensitive=True)
 
     @client.on_callback_query(cb_prefix("cmod:"))
     async def continuous_modifier_subject_callback(*, client: Client, callback_query: CallbackQuery):
@@ -147,6 +359,7 @@ def register(client: Client, ctx: BotContext) -> None:
                 await safe_answer_callback(callback_query, "⛔ این دکمه فقط مخصوص دبیر صادرکننده دستور است.", show_alert=True)
                 return
 
+            ctx.users_repo.clear_session(expected_bale_id)
             res = ctx.services.grades.apply_continuous_modifier(
                 actor=actor,
                 student_user_id=student_id,
@@ -446,4 +659,28 @@ async def _handle_grades_step(ctx: BotContext, client: Client, message: Message,
             f"اکنون در هر ساعت شبانه‌روز می‌توانید از آدرس زیر کارنامه آنلاین خود را مشاهده و چاپ کنید:\n"
             f"{base_url}/student-portal",
             reply_markup=ctx.main_markup_for(actor),
+        )
+        return
+
+    if step == "FORWARDED_MOD_TARGET":
+        parsed = _parse_continuous_modifier_text(raw, allow_short=True)
+        if not parsed:
+            raise ValidationError("پس از فوروارد پیام دانش‌آموز، عبارت «مثبت درسی» یا «منفی درسی» را ارسال کنید (یا دکمه لغو را بزنید).")
+        delta, subject_hint, note = parsed
+        stu_id = int(session["data"]["student_id"])
+        student = ctx.users_repo.get_by_id(stu_id)
+        ctx.users_repo.clear_session(uid)
+        if not student or not student.get("is_active"):
+            raise ValidationError("دانش‌آموز هدف یافت نشد.")
+        await _apply_modifier_and_respond(
+            ctx=ctx,
+            client=client,
+            actor=actor,
+            student=student,
+            delta=delta,
+            subject_hint=subject_hint,
+            note=note,
+            source_chat_id=int(message.chat.id) if message.chat else None,
+            source_message_id=int(message.id) if message.id else None,
+            reply_message=message,
         )
